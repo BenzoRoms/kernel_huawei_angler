@@ -6549,6 +6549,9 @@ static void claim_allocations(int cpu, struct sched_domain *sd)
 		*per_cpu_ptr(sdd->sge, cpu) = NULL;
 }
 
+#define for_each_sd_topology(tl)			\
+	for (tl = sched_domain_topology; tl->init; tl++)
+
 #ifdef CONFIG_NUMA
 static int sched_domains_numa_levels;
 static int *sched_domains_numa_distance;
