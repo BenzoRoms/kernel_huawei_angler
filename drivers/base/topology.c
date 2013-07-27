@@ -43,25 +43,6 @@ static ssize_t show_##name(struct device *dev,			\
 	return sprintf(buf, "%d\n", topology_##name(dev->id));	\
 }
 
-#ifdef arch_provides_topology_pointers
-#define define_siblings_show_map(name)					\
-static ssize_t show_##name(struct device *dev,				\
-			   struct device_attribute *attr, char *buf)	\
-{									\
-	unsigned int cpu = dev->id;					\
-	return cpumap_print_to_pagebuf(false, buf, topology_##name(cpu));\
-}
-
-#define define_siblings_show_list(name)					\
-static ssize_t show_##name##_list(struct device *dev,			\
-				  struct device_attribute *attr,	\
-				  char *buf)				\
-{									\
-	unsigned int cpu = dev->id;					\
-	return cpumap_print_to_pagebuf(true, buf, topology_##name(cpu));\
-}
-
-#else
 #define define_siblings_show_map(name)					\
 static ssize_t show_##name(struct device *dev,				\
 			   struct device_attribute *attr, char *buf)	\
@@ -76,7 +57,6 @@ static ssize_t show_##name##_list(struct device *dev,			\
 {									\
 	return cpumap_print_to_pagebuf(true, buf, topology_##name(dev->id));\
 }
-#endif
 
 #define define_siblings_show_func(name)		\
 	define_siblings_show_map(name); define_siblings_show_list(name)
