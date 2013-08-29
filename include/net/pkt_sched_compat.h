@@ -6,11 +6,9 @@
 /* Logical priority bands not depending on specific packet scheduler.
    Every scheduler will map them to real traffic classes, if it has
    no more precise mechanism to classify packets.
-
    These numbers have no special meaning, though their coincidence
    with obsolete IPv6 values is not occasional :-). New IPv6 drafts
    preferred full anarchy inspired by diffserv group.
-
    Note: TC_PRIO_BESTEFFORT does not mean that it is the most unhappy
    class, actually, as rule it will be handled with more care than
    filler or even bulk.
@@ -48,18 +46,14 @@ struct tc_estimator {
 
 /* "Handles"
    ---------
-
     All the traffic control objects have 32bit identifiers, or "handles".
-
     They can be considered as opaque numbers from user API viewpoint,
     but actually they always consist of two fields: major and
     minor numbers, which are interpreted by kernel specially,
     that may be used by applications, though not recommended.
-
     F.e. qdisc handles always have minor number equal to zero,
     classes (or flows) have major equal to parent qdisc major, and
     minor uniquely identifying class inside qdisc.
-
     Macros to manipulate handles:
  */
 
@@ -126,7 +120,6 @@ struct tc_fifo_qopt {
 struct tc_prio_qopt {
 	int	bands;			/* Number of bands */
 	__u8	priomap[TC_PRIO_MAX+1];	/* Map: logical priority -> PRIO band */
-	__u8	enable_flow;		/* Enable dequeue */
 };
 
 /* MULTIQ section */
@@ -172,6 +165,10 @@ enum {
 	TCA_TBF_PARMS,
 	TCA_TBF_RTAB,
 	TCA_TBF_PTAB,
+	TCA_TBF_RATE64,
+	TCA_TBF_PRATE64,
+	TCA_TBF_BURST,
+	TCA_TBF_PBURST,
 	__TCA_TBF_MAX,
 };
 
@@ -265,7 +262,8 @@ enum {
        TCA_GRED_STAB,
        TCA_GRED_DPS,
        TCA_GRED_MAX_P,
-	   __TCA_GRED_MAX,
+       TCA_GRED_LIMIT,
+       __TCA_GRED_MAX,
 };
 
 #define TCA_GRED_MAX (__TCA_GRED_MAX - 1)
@@ -358,6 +356,8 @@ enum {
 	TCA_HTB_CTAB,
 	TCA_HTB_RTAB,
 	TCA_HTB_DIRECT_QLEN,
+	TCA_HTB_RATE64,
+	TCA_HTB_CEIL64,
 	__TCA_HTB_MAX,
 };
 
@@ -520,6 +520,7 @@ enum {
 	TCA_NETEM_LOSS,
 	TCA_NETEM_RATE,
 	TCA_NETEM_ECN,
+	TCA_NETEM_RATE64,
 	__TCA_NETEM_MAX,
 };
 
@@ -673,6 +674,7 @@ enum {
 	TCA_CODEL_LIMIT,
 	TCA_CODEL_INTERVAL,
 	TCA_CODEL_ECN,
+	TCA_CODEL_CE_THRESHOLD,
 	__TCA_CODEL_MAX
 };
 
@@ -689,6 +691,7 @@ struct tc_codel_xstats {
 	__u32	drop_overlimit; /* number of time max qdisc packet limit was hit */
 	__u32	ecn_mark;  /* number of packets we ECN marked instead of dropped */
 	__u32	dropping;  /* are we in dropping state ? */
+	__u32	ce_mark;   /* number of CE marked packets because of ce_threshold */
 };
 
 /* FQ_CODEL */
@@ -701,6 +704,7 @@ enum {
 	TCA_FQ_CODEL_ECN,
 	TCA_FQ_CODEL_FLOWS,
 	TCA_FQ_CODEL_QUANTUM,
+	TCA_FQ_CODEL_CE_THRESHOLD,
 	__TCA_FQ_CODEL_MAX
 };
 
@@ -724,6 +728,7 @@ struct tc_fq_codel_qd_stats {
 				 */
 	__u32	new_flows_len;	/* count of flows in new list */
 	__u32	old_flows_len;	/* count of flows in old list */
+	__u32	ce_mark;	/* packets above ce_threshold */
 };
 
 struct tc_fq_codel_cl_stats {
@@ -767,6 +772,8 @@ enum {
 	TCA_FQ_BUCKETS_LOG,	/* log2(number of buckets) */
 
 	TCA_FQ_FLOW_REFILL_DELAY,	/* flow credit refill delay in usec */
+
+	TCA_FQ_ORPHAN_MASK,	/* mask applied to orphaned skb hashes */
 
 	__TCA_FQ_MAX
 };
@@ -836,5 +843,61 @@ struct tc_pie_xstats {
 	__u32 overlimit;        /* dropped due to lack of space in queue */
 	__u32 maxq;             /* maximum queue size */
 	__u32 ecn_mark;         /* packets marked with ecn*/
+};
+
+/* FQ_PIE */
+
+enum {
+	TCA_FQ_PIE_UNSPEC,
+	TCA_FQ_PIE_TARGET,
+	TCA_FQ_PIE_LIMIT,
+	TCA_FQ_PIE_ECN,
+	TCA_FQ_PIE_FLOWS,
+	TCA_FQ_PIE_QUANTUM,
+	TCA_FQ_PIE_TUPDATE,
+	TCA_FQ_PIE_ALPHA,
+	TCA_FQ_PIE_BETA,
+	TCA_FQ_PIE_BYTEMODE, //DRR based on byte size or packets
+	__TCA_FQ_PIE_MAX
+};
+
+#define TCA_FQ_PIE_MAX	(__TCA_FQ_PIE_MAX - 1)
+
+enum {
+	TCA_FQ_PIE_XSTATS_QDISC,
+	TCA_FQ_PIE_XSTATS_CLASS,
+};
+
+struct tc_fq_pie_qd_stats {
+	__u32 packets_in;       /* total number of packets enqueued */
+	__u32 drop_overlimit; 	/* number of time max qdisc
+				 * packet limit was hit
+				 */
+	__u32 maxq;             /* maximum queue size */
+	__u32 dropped;          /* packets dropped due to pie_action */
+	__u32 ecn_mark;	/* number of packets we ECN marked
+				 * instead of being dropped
+				 */
+	__u32 new_flow_count; /* number of time packets
+				 * created a 'new flow'
+				 */
+	__u32 new_flows_len;	/* count of flows in new list */
+	__u32 old_flows_len;	/* count of flows in old list */
+
+	__u32 prob;             /* current probability */
+	__u32 delay;            /* current delay in ms */
+	__u32 avg_dq_rate;      /* current average dq_rate in bits/pie_time */
+};
+
+struct tc_fq_pie_cl_stats {
+	__s32 deficit;
+};
+
+struct tc_fq_pie_xstats {
+	__u32 type;
+	union {
+		struct tc_fq_pie_qd_stats qdisc_stats;
+		struct tc_fq_pie_cl_stats class_stats;
+	};
 };
 #endif
