@@ -131,6 +131,11 @@ EXPORT_SYMBOL_GPL(rcu_sched_lock_map);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 
+static struct lock_class_key rcu_callback_key;
+struct lockdep_map rcu_callback_map =
+	STATIC_LOCKDEP_MAP_INIT("rcu_callback", &rcu_callback_key);
+EXPORT_SYMBOL_GPL(rcu_callback_map);
+
 int notrace debug_lockdep_rcu_enabled(void)
 {
 	return rcu_scheduler_active && debug_locks &&
