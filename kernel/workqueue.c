@@ -641,6 +641,35 @@ static void set_work_pool_and_clear_pending(struct work_struct *work,
 	 */
 	smp_wmb();
 	set_work_data(work, (unsigned long)pool_id << WORK_OFFQ_POOL_SHIFT, 0);
+	/*
+	 * The following mb guarantees that previous clear of a PENDING bit
+	 * will not be reordered with any speculative LOADS or STORES from
+	 * work->current_func, which is executed afterwards.  This possible
+	 * reordering can lead to a missed execution on attempt to qeueue
+	 * the same @work.  E.g. consider this case:
+	 *
+	 *   CPU#0                         CPU#1
+	 *   ----------------------------  --------------------------------
+	 *
+	 * 1  STORE event_indicated
+	 * 2  queue_work_on() {
+	 * 3    test_and_set_bit(PENDING)
+	 * 4 }                             set_..._and_clear_pending() {
+	 * 5                                 set_work_data() # clear bit
+	 * 6                                 smp_mb()
+	 * 7                               work->current_func() {
+	 * 8				      LOAD event_indicated
+	 *				   }
+	 *
+	 * Without an explicit full barrier speculative LOAD on line 8 can
+	 * be executed before CPU#0 does STORE on line 1.  If that happens,
+	 * CPU#0 observes the PENDING bit is still set and new execution of
+	 * a @work is not queued in a hope, that CPU#1 will eventually
+	 * finish the queued @work.  Meanwhile CPU#1 does not see
+	 * event_indicated is set, because speculative LOAD was executed
+	 * before actual STORE.
+	 */
+	smp_mb();
 }
 
 static void clear_work_data(struct work_struct *work)
@@ -1749,15 +1778,16 @@ static struct worker *create_worker(struct worker_pool *pool)
 	if (IS_ERR(worker->task))
 		goto fail;
 
+	set_user_nice(worker->task, pool->attrs->nice);
+
+	/* prevent userland from meddling with cpumask of workqueue workers */
+	worker->task->flags |= PF_NO_SETAFFINITY;
+
 	/*
 	 * set_cpus_allowed_ptr() will fail if the cpumask doesn't have any
 	 * online CPUs.  It'll be re-applied when any of the CPUs come up.
 	 */
-	set_user_nice(worker->task, pool->attrs->nice);
 	set_cpus_allowed_ptr(worker->task, pool->attrs->cpumask);
-
-	/* prevent userland from meddling with cpumask of workqueue workers */
-	worker->task->flags |= PF_NO_SETAFFINITY;
 
 	/*
 	 * The caller is responsible for ensuring %POOL_DISASSOCIATED
@@ -4091,17 +4121,13 @@ static void wq_update_unbound_numa(struct workqueue_struct *wq, int cpu,
 	 * Let's determine what needs to be done.  If the target cpumask is
 	 * different from wq's, we need to compare it to @pwq's and create
 	 * a new one if they don't match.  If the target cpumask equals
-	 * wq's, the default pwq should be used.  If @pwq is already the
-	 * default one, nothing to do; otherwise, install the default one.
+	 * wq's, the default pwq should be used.
 	 */
 	if (wq_calc_node_cpumask(wq->unbound_attrs, node, cpu_off, cpumask)) {
 		if (cpumask_equal(cpumask, pwq->pool->attrs->cpumask))
 			goto out_unlock;
 	} else {
-		if (pwq == wq->dfl_pwq)
-			goto out_unlock;
-		else
-			goto use_dfl_pwq;
+		goto use_dfl_pwq;
 	}
 
 	mutex_unlock(&wq->mutex);
@@ -4584,8 +4610,6 @@ static void wq_unbind_fn(struct work_struct *work)
 	int wi;
 
 	for_each_cpu_worker_pool(pool, cpu) {
-		WARN_ON_ONCE(cpu != smp_processor_id());
-
 		mutex_lock(&pool->manager_mutex);
 		spin_lock_irq(&pool->lock);
 
