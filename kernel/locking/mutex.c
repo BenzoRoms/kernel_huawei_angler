@@ -137,9 +137,12 @@ void mspin_lock(struct mspin_node **lock, struct mspin_node *node)
 		return;
 	}
 	ACCESS_ONCE(prev->next) = node;
-	smp_wmb();
-	/* Wait until the lock holder passes the lock down */
-	while (!cpu_relaxed_read(&(node->locked)))
+	/*
+	 * Wait until the lock holder passes the lock down.
+	 * Using smp_load_acquire() provides a memory barrier that
+	 * ensures subsequent operations happen after the lock is acquired.
+	 */
+	while (!(smp_load_acquire(&node->locked)))
 		cpu_read_relax();
 }
 
@@ -157,8 +160,13 @@ static void mspin_unlock(struct mspin_node **lock, struct mspin_node *node)
 		while (!(next = (struct mspin_node*)(cpu_relaxed_read_long(&(node->next)))))
 			cpu_read_relax();
 	}
-	ACCESS_ONCE(next->locked) = 1;
-	smp_wmb();
+	/*
+	 * Pass lock to next waiter.
+	 * smp_store_release() provides a memory barrier to ensure
+	 * all operations in the critical section has been completed
+	 * before unlocking.
+	 */
+	smp_store_release(&next->locked, 1);
 }
 
 /*
