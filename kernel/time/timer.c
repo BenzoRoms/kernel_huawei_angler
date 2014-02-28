@@ -49,7 +49,7 @@
 #include <asm/timex.h>
 #include <asm/io.h>
 
-#include "time/tick-internal.h"
+#include "tick-internal.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/timer.h>
@@ -1728,7 +1728,6 @@ void __init init_timers(void)
 
 	err = timer_cpu_notify(&timers_nb, (unsigned long)CPU_UP_PREPARE,
 			       (void *)(long)smp_processor_id());
-	init_timer_stats();
 
 	BUG_ON(err != NOTIFY_OK);
 
@@ -1740,7 +1739,7 @@ void __init init_timers(void)
 	err = init_timers_cpu(NR_CPUS);
 	BUG_ON(err);
 #endif
-
+	init_timer_stats();
 	register_cpu_notifier(&timers_nb);
 	open_softirq(TIMER_SOFTIRQ, run_timer_softirq);
 }
