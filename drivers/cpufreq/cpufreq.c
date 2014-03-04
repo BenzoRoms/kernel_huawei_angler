@@ -1311,14 +1311,6 @@ static int __cpufreq_add_dev(struct device *dev, struct subsys_interface *sif,
 		goto err_set_policy_cpu;
 	}
 
-	if (cpufreq_driver->get) {
-		policy->cur = cpufreq_driver->get(policy->cpu);
-		if (!policy->cur) {
-			pr_err("%s: ->get() failed\n", __func__);
-			goto err_get_freq;
-		}
-	}
-
 	/* related cpus should atleast have policy->cpus */
 	cpumask_or(policy->related_cpus, policy->related_cpus, policy->cpus);
 
@@ -1331,6 +1323,14 @@ static int __cpufreq_add_dev(struct device *dev, struct subsys_interface *sif,
 	if (!frozen) {
 		policy->user_policy.min = policy->min;
 		policy->user_policy.max = policy->max;
+	}
+
+	if (cpufreq_driver->get) {
+		policy->cur = cpufreq_driver->get(policy->cpu);
+		if (!policy->cur) {
+			pr_err("%s: ->get() failed\n", __func__);
+			goto err_get_freq;
+		}
 	}
 
 	blocking_notifier_call_chain(&cpufreq_policy_notifier_list,
