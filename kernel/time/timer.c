@@ -759,8 +759,6 @@ __mod_timer(struct timer_list *timer, unsigned long expires,
 
 	debug_activate(timer, expires);
 
-	cpu = smp_processor_id();
-
 #ifdef CONFIG_SMP
 	if (base != tvec_base_deferral) {
 #endif
