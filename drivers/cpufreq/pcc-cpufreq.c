@@ -214,7 +214,7 @@ static int pcc_cpufreq_target(struct cpufreq_policy *policy,
 		(pcch_virt_addr + pcc_cpu_data->input_offset));
 
 	freqs.new = target_freq;
-	cpufreq_notify_transition(policy, &freqs, CPUFREQ_PRECHANGE);
+	cpufreq_freq_transition_begin(policy, &freqs);
 
 	input_buffer = 0x1 | (((target_freq * 100)
 			       / (ioread32(&pcch_hdr->nominal) * 1000)) << 8);
