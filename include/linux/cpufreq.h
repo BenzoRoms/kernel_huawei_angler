@@ -343,10 +343,6 @@ cpufreq_verify_within_cpu_limits(struct cpufreq_policy *policy)
 int cpufreq_register_notifier(struct notifier_block *nb, unsigned int list);
 int cpufreq_unregister_notifier(struct notifier_block *nb, unsigned int list);
 
-void cpufreq_notify_transition(struct cpufreq_policy *policy,
-		struct cpufreq_freqs *freqs, unsigned int state);
-void cpufreq_notify_post_transition(struct cpufreq_policy *policy,
-		struct cpufreq_freqs *freqs, int transition_failed);
 void cpufreq_freq_transition_begin(struct cpufreq_policy *policy,
 		struct cpufreq_freqs *freqs);
 void cpufreq_freq_transition_end(struct cpufreq_policy *policy,
