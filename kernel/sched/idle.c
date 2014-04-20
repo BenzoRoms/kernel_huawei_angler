@@ -91,7 +91,7 @@ void __weak arch_cpu_idle(void)
  *
  * NOTE: no locks or semaphores should be used here
  */
-static int cpuidle_idle_call(void)
+static void cpuidle_idle_call(void)
 {
 	struct cpuidle_device *dev = __this_cpu_read(cpuidle_devices);
 	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(dev);
