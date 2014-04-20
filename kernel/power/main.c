@@ -282,8 +282,8 @@ struct kobject *power_kobj;
  *	state - control system power state.
  *
  *	show() returns what states are supported, which is hard-coded to
- *	'standby' (Power-On Suspend), 'mem' (Suspend-to-RAM), and
- *	'disk' (Suspend-to-Disk).
+ *	'freeze' (Low-Power Idle), 'standby' (Power-On Suspend),
+ *	'mem' (Suspend-to-RAM), and 'disk' (Suspend-to-Disk).
  *
  *	store() accepts one of those strings, translates it into the
  *	proper enumerated value, and initiates a suspend transition.
@@ -425,6 +425,8 @@ static ssize_t wakeup_count_store(struct kobject *kobj,
 	if (sscanf(buf, "%u", &val) == 1) {
 		if (pm_save_wakeup_count(val))
 			error = n;
+		else
+			pm_print_active_wakeup_sources();
 	}
 
  out:
