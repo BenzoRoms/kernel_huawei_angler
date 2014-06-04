@@ -13,6 +13,8 @@
 
 #include <trace/events/power.h>
 
+#include "sched.h"
+
 int __read_mostly cpu_idle_force_poll;
 
 void cpu_idle_poll_ctrl(bool enable)
@@ -253,12 +255,14 @@ static void cpu_idle_loop(void)
 		__current_clr_polling();
 
 		/*
-		 * We promise to reschedule if need_resched is set while
-		 * polling is set.  That means that clearing polling
-		 * needs to be visible before rescheduling.
+		 * We promise to call sched_ttwu_pending and reschedule
+		 * if need_resched is set while polling is set.  That
+		 * means that clearing polling needs to be visible
+		 * before doing these things.
 		 */
 		smp_mb__after_atomic();
 
+		sched_ttwu_pending();
 		schedule_preempt_disabled();
 		if (cpu_is_offline(cpu))
 			arch_cpu_idle_dead();
