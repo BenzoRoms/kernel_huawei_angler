@@ -83,6 +83,7 @@ struct tvec_base {
 	unsigned long timer_jiffies;
 	unsigned long next_timer;
 	unsigned long active_timers;
+	int cpu;
 	struct tvec_root tv1;
 	struct tvec tv2;
 	struct tvec tv3;
@@ -1591,6 +1592,7 @@ static int __cpuinit init_timers_cpu(int cpu)
 		}
 		spin_lock_init(&base->lock);
 		tvec_base_done[cpu] = 1;
+		base->cpu = cpu;
 	} else {
 		if (cpu != NR_CPUS)
 			base = per_cpu(tvec_bases, cpu);
