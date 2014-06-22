@@ -54,7 +54,7 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/timer.h>
 
-u64 jiffies_64 __cacheline_aligned_in_smp = INITIAL_JIFFIES;
+__visible u64 jiffies_64 __cacheline_aligned_in_smp = INITIAL_JIFFIES;
 
 EXPORT_SYMBOL(jiffies_64);
 
@@ -83,6 +83,7 @@ struct tvec_base {
 	unsigned long timer_jiffies;
 	unsigned long next_timer;
 	unsigned long active_timers;
+	int cpu;
 	struct tvec_root tv1;
 	struct tvec tv2;
 	struct tvec tv3;
@@ -1557,12 +1558,11 @@ static int __cpuinit init_timers_cpu(int cpu)
 			 * The APs use this path later in boot
 			 */
 			if (cpu != NR_CPUS)
-				base = kmalloc_node(sizeof(*base),
-						    GFP_KERNEL | __GFP_ZERO,
-						    cpu_to_node(cpu));
+				base = kzalloc_node(sizeof(*base), GFP_KERNEL,
+					            cpu_to_node(cpu));
 			else
 				base = kmalloc(sizeof(*base),
-					       GFP_KERNEL | __GFP_ZERO);
+					            GFP_KERNEL | __GFP_ZERO);
 
 			if (!base)
 				return -ENOMEM;
@@ -1591,6 +1591,7 @@ static int __cpuinit init_timers_cpu(int cpu)
 		}
 		spin_lock_init(&base->lock);
 		tvec_base_done[cpu] = 1;
+		base->cpu = cpu;
 	} else {
 		if (cpu != NR_CPUS)
 			base = per_cpu(tvec_bases, cpu);
