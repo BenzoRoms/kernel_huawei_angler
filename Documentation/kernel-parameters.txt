@@ -2598,6 +2598,13 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			(rcub/N). Valid values are 1-99 and the default
 			is 1 (the least-favored priority).
 
+	rcutree.rcu_nocb_leader_stride= [KNL]
+			Set the number of NOCB kthread groups, which
+			defaults to the square root of the number of
+			CPUs.  Larger numbers reduces the wakeup overhead
+			on the per-CPU grace-period kthreads, but increases
+			that same overhead on each group's leader.
+
 	rcutree.qhimark= [KNL]
 			Set threshold of queued
 			RCU callbacks over which batch limiting is disabled.
