@@ -663,6 +663,7 @@ static inline void cpu_relax(void)
 #ifndef cpu_read_relax
 #define cpu_read_relax() cpu_relax()
 #endif
+#define cpu_relax_lowlatency() cpu_relax()
 
 /* Stop speculative execution and prefetching of modified code. */
 static inline void sync_core(void)
