@@ -117,7 +117,11 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 
 	struct cpuidle_state *target_state = &drv->states[index];
 
+	trace_cpu_idle_rcuidle(index, dev->cpu);
+
 	entered_state = target_state->enter(dev, drv, index);
+
+	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, dev->cpu);
 
 	if (!cpuidle_state_is_coupled(dev, drv, entered_state))
 		local_irq_enable();
