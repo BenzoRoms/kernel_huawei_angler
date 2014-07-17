@@ -1545,10 +1545,11 @@ static int cpufreq_nominate_new_policy_cpu(struct cpufreq_policy *policy,
 	if (ret) {
 		pr_err("%s: Failed to move kobj: %d", __func__, ret);
 
-		ret = sysfs_create_link(&cpu_dev->kobj, &policy->kobj,
-					"cpufreq");
+		if (sysfs_create_link(&cpu_dev->kobj, &policy->kobj, "cpufreq"))
+			pr_err("%s: Failed to restore kobj link to cpu:%d\n",
+			       __func__, cpu_dev->id);
 
-		return -EINVAL;
+		return ret;
 	}
 
 	return cpu_dev->id;
