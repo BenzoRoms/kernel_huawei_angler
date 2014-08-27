@@ -14,6 +14,8 @@
 
 #include <trace/events/power.h>
 
+#include "sched.h"
+
 int __read_mostly cpu_idle_force_poll;
 
 void cpu_idle_poll_ctrl(bool enable)
@@ -68,8 +70,7 @@ static inline int cpu_idle_poll(void)
 	rcu_idle_enter();
 	trace_cpu_idle_rcuidle(0, smp_processor_id());
 	local_irq_enable();
-	while (!tif_need_resched() && (cpu_idle_force_poll ||
-		__get_cpu_var(idle_force_poll)))
+	while (!tif_need_resched())
 		cpu_relax();
 	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, smp_processor_id());
 	rcu_idle_exit();
@@ -91,24 +92,25 @@ void __weak arch_cpu_idle(void)
  * cpuidle_idle_call - the main idle function
  *
  * NOTE: no locks or semaphores should be used here
- * return non-zero on failure
+ *
+ * On archs that support TIF_POLLING_NRFLAG, is called with polling
+ * set, and it returns with polling set.  If it ever stops polling, it
+ * must clear the polling bit.
  */
-static int cpuidle_idle_call(void)
+static void cpuidle_idle_call(void)
 {
 	struct cpuidle_device *dev = __this_cpu_read(cpuidle_devices);
 	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(dev);
-	int next_state, entered_state, ret;
-	bool broadcast;
+	int next_state, entered_state;
+	unsigned int broadcast;
 
 	/*
 	 * Check if the idle task must be rescheduled. If it is the
-	 * case, exit the function after re-enabling the local irq and
-	 * set again the polling flag
+	 * case, exit the function after re-enabling the local irq.
 	 */
-	if (current_clr_polling_and_test()) {
+	if (need_resched()) {
 		local_irq_enable();
-		__current_set_polling();
-		return 0;
+		return;
 	}
 
 	/*
@@ -141,106 +143,108 @@ static int cpuidle_idle_call(void)
 
 	/*
 	 * Ask the cpuidle framework to choose a convenient idle state.
-	 * Fall back to the default arch specific idle method on errors.
+	 * Fall back to the default arch idle method on errors.
 	 */
 	next_state = cpuidle_select(drv, dev);
-
-	ret = next_state;
-	if (ret >= 0) {
+	if (next_state < 0) {
+use_default:
 		/*
-		 * The idle task must be scheduled, it is pointless to
-		 * go to idle, just update no idle residency and get
-		 * out of this function
+		 * We can't use the cpuidle framework, let's use the default
+		 * idle routine.
 		 */
-		if (current_clr_polling_and_test()) {
-			dev->last_residency = 0;
-			entered_state = next_state;
+		if (current_clr_polling_and_test())
 			local_irq_enable();
-		} else {
-			broadcast = !!(drv->states[next_state].flags &
-				       CPUIDLE_FLAG_TIMER_STOP);
+		else
+			arch_cpu_idle();
 
-			if (broadcast)
-				/*
-				 * Tell the time framework to switch
-				 * to a broadcast timer because our
-				 * local timer will be shutdown. If a
-				 * local timer is used from another
-				 * cpu as a broadcast timer, this call
-				 * may fail if it is not available
-				 */
-				ret = clockevents_notify(
-					CLOCK_EVT_NOTIFY_BROADCAST_ENTER,
-					&dev->cpu);
-
-			if (ret >= 0) {
-				trace_cpu_idle_rcuidle(next_state, dev->cpu);
-
-				/*
-				 * Enter the idle state previously
-				 * returned by the governor
-				 * decision. This function will block
-				 * until an interrupt occurs and will
-				 * take care of re-enabling the local
-				 * interrupts
-				 */
-				entered_state = cpuidle_enter(drv, dev,
-							      next_state);
-
-				trace_cpu_idle_rcuidle(PWR_EVENT_EXIT,
-						       dev->cpu);
-
-				if (broadcast)
-					clockevents_notify(
-						CLOCK_EVT_NOTIFY_BROADCAST_EXIT,
-						&dev->cpu);
-
-				/*
-				 * Give the governor an opportunity to reflect on the
-				 * outcome
-				 */
-				cpuidle_reflect(dev, entered_state);
-			}
-		}
+		goto exit_idle;
 	}
 
+
 	/*
-	 * We can't use the cpuidle framework, let's use the default
-	 * idle routine
+	 * The idle task must be scheduled, it is pointless to
+	 * go to idle, just update no idle residency and get
+	 * out of this function
 	 */
-	if (ret < 0)
-		arch_cpu_idle();
+	if (current_clr_polling_and_test()) {
+		dev->last_residency = 0;
+		entered_state = next_state;
+		local_irq_enable();
+		goto exit_idle;
+	}
+
+	broadcast = drv->states[next_state].flags & CPUIDLE_FLAG_TIMER_STOP;
+
+	/*
+	 * Tell the time framework to switch to a broadcast timer
+	 * because our local timer will be shutdown. If a local timer
+	 * is used from another cpu as a broadcast timer, this call may
+	 * fail if it is not available
+	 */
+	if (broadcast &&
+	    clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_ENTER, &dev->cpu))
+		goto use_default;
+
+	/* Take note of the planned idle state. */
+	idle_set_state(this_rq(), &drv->states[next_state]);
+
+	/*
+	 * Enter the idle state previously returned by the governor decision.
+	 * This function will block until an interrupt occurs and will take
+	 * care of re-enabling the local interrupts
+	 */
+	entered_state = cpuidle_enter(drv, dev, next_state);
+
+	/* The cpu is no longer idle or about to enter idle. */
+	idle_set_state(this_rq(), NULL);
+
+	if (broadcast)
+		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_EXIT, &dev->cpu);
+
+	/*
+	 * Give the governor an opportunity to reflect on the outcome
+	 */
+	cpuidle_reflect(dev, entered_state);
 
 exit_idle:
-
 	__current_set_polling();
 
 	/*
-	 * It is up to the idle functions to enable back the local
-	 * interrupt
+	 * It is up to the idle functions to reenable local interrupts
 	 */
 	if (WARN_ON_ONCE(irqs_disabled()))
 		local_irq_enable();
 
 	rcu_idle_exit();
 	start_critical_timings();
-
-	return 0;
 }
 
 /*
  * Generic idle loop implementation
+ *
+ * Called with polling cleared.
  */
 static void cpu_idle_loop(void)
 {
-	int cpu = smp_processor_id();
-
 	while (1) {
+		/*
+		 * If the arch has a polling bit, we maintain an invariant:
+		 *
+		 * Our polling bit is clear if we're not scheduled (i.e. if
+		 * rq->curr != rq->idle).  This means that, if rq->idle has
+		 * the polling bit set, then setting need_resched is
+		 * guaranteed to cause the cpu to reschedule.
+		 */
+
+		__current_set_polling();
 		tick_nohz_idle_enter();
 
 		while (!need_resched()) {
 			check_pgt_cache();
 			rmb();
+
+			if (cpu_is_offline(smp_processor_id()))
+				arch_cpu_idle_dead();
 
 			local_irq_disable();
 			arch_cpu_idle_enter();
@@ -254,20 +258,36 @@ static void cpu_idle_loop(void)
 			 * know that the IPI is going to arrive right
 			 * away
 			 */
-			if (cpu_idle_force_poll ||
-			    tick_check_broadcast_expired() ||
-			    __get_cpu_var(idle_force_poll))
+			if (cpu_idle_force_poll || tick_check_broadcast_expired())
 				cpu_idle_poll();
 			else
 				cpuidle_idle_call();
 
 			arch_cpu_idle_exit();
 		}
-		tick_nohz_idle_exit();
-		schedule_preempt_disabled();
-		if (cpu_is_offline(cpu))
-			arch_cpu_idle_dead();
 
+		/*
+		 * Since we fell out of the loop above, we know
+		 * TIF_NEED_RESCHED must be set, propagate it into
+		 * PREEMPT_NEED_RESCHED.
+		 *
+		 * This is required because for polling idle loops we will
+		 * not have had an IPI to fold the state for us.
+		 */
+		preempt_set_need_resched();
+		tick_nohz_idle_exit();
+		__current_clr_polling();
+
+		/*
+		 * We promise to call sched_ttwu_pending and reschedule
+		 * if need_resched is set while polling is set.  That
+		 * means that clearing polling needs to be visible
+		 * before doing these things.
+		 */
+		smp_mb__after_atomic();
+
+		sched_ttwu_pending();
+		schedule_preempt_disabled();
 	}
 }
 
@@ -288,7 +308,6 @@ void cpu_startup_entry(enum cpuhp_state state)
 	 */
 	boot_init_stack_canary();
 #endif
-	__current_set_polling();
 	arch_cpu_idle_prepare();
 	per_cpu(idle_force_poll, smp_processor_id()) = 0;
 	cpu_idle_loop();
