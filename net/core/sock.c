@@ -1803,10 +1803,15 @@ struct sk_buff *sock_alloc_send_pskb(struct sock *sk, unsigned long header_len,
 			while (order) {
 				if (npages >= 1 << order) {
 					page = alloc_pages(sk->sk_allocation |
-							   __GFP_COMP | __GFP_NOWARN,
+							   __GFP_COMP |
+							   __GFP_NOWARN |
+							   __GFP_NORETRY,
 							   order);
 					if (page)
 						goto fill_page;
+					/* Do not retry other high order allocations */
+					order = 1;
+					max_page_order = 0;
 				}
 				order--;
 			}
@@ -1844,35 +1849,51 @@ EXPORT_SYMBOL(sock_alloc_send_skb);
 /* On 32bit arches, an skb frag is limited to 2^15 */
 #define SKB_FRAG_PAGE_ORDER	get_order(32768)
 
-bool sk_page_frag_refill(struct sock *sk, struct page_frag *pfrag)
+/**
+ * skb_page_frag_refill - check that a page_frag contains enough room
+ * @sz: minimum size of the fragment we want to get
+ * @pfrag: pointer to page_frag
+ * @prio: priority for memory allocation
+ *
+ * Note: While this allocator tries to use high order pages, there is
+ * no guarantee that allocations succeed. Therefore, @sz MUST be
+ * less or equal than PAGE_SIZE.
+ */
+bool skb_page_frag_refill(unsigned int sz, struct page_frag *pfrag, gfp_t gfp)
 {
-	int order;
-
 	if (pfrag->page) {
 		if (atomic_read(&pfrag->page->_count) == 1) {
 			pfrag->offset = 0;
 			return true;
 		}
-		if (pfrag->offset < pfrag->size)
+		if (pfrag->offset + sz <= pfrag->size)
 			return true;
 		put_page(pfrag->page);
 	}
 
-	/* We restrict high order allocations to users that can afford to wait */
-	order = (sk->sk_allocation & __GFP_WAIT) ? SKB_FRAG_PAGE_ORDER : 0;
-
-	do {
-		gfp_t gfp = sk->sk_allocation;
-
-		if (order)
-			gfp |= __GFP_COMP | __GFP_NOWARN | __GFP_NORETRY;
-		pfrag->page = alloc_pages(gfp, order);
+	pfrag->offset = 0;
+	if (SKB_FRAG_PAGE_ORDER) {
+		pfrag->page = alloc_pages(gfp | __GFP_COMP |
+					  __GFP_NOWARN | __GFP_NORETRY,
+					  SKB_FRAG_PAGE_ORDER);
 		if (likely(pfrag->page)) {
-			pfrag->offset = 0;
-			pfrag->size = PAGE_SIZE << order;
+			pfrag->size = PAGE_SIZE << SKB_FRAG_PAGE_ORDER;
 			return true;
 		}
-	} while (--order >= 0);
+	}
+	pfrag->page = alloc_page(gfp);
+	if (likely(pfrag->page)) {
+		pfrag->size = PAGE_SIZE;
+		return true;
+	}
+	return false;
+}
+EXPORT_SYMBOL(skb_page_frag_refill);
+
+bool sk_page_frag_refill(struct sock *sk, struct page_frag *pfrag)
+{
+	if (likely(skb_page_frag_refill(32U, pfrag, sk->sk_allocation)))
+		return true;
 
 	sk_enter_memory_pressure(sk);
 	sk_stream_moderate_sndbuf(sk);

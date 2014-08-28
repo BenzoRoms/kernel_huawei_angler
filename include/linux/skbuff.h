@@ -2167,6 +2167,8 @@ static inline void skb_frag_set_page(struct sk_buff *skb, int f,
 	__skb_frag_set_page(&skb_shinfo(skb)->frags[f], page);
 }
 
+bool skb_page_frag_refill(unsigned int sz, struct page_frag *pfrag, gfp_t prio);
+
 /**
  * skb_frag_dma_map - maps a paged fragment via the DMA API
  * @dev: the device to map the fragment to
@@ -2449,7 +2451,8 @@ extern int	       skb_copy_datagram_iovec(const struct sk_buff *from,
 					       int size);
 extern int	       skb_copy_and_csum_datagram_iovec(struct sk_buff *skb,
 							int hlen,
-							struct iovec *iov);
+							struct iovec *iov,
+							int len);
 extern int	       skb_copy_datagram_from_iovec(struct sk_buff *skb,
 						    int offset,
 						    const struct iovec *from,
