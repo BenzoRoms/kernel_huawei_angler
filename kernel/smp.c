@@ -216,7 +216,7 @@ void generic_smp_call_function_single_interrupt(void)
  */
 static void flush_smp_call_function_queue(bool warn_cpu_offline)
 {
-	struct call_single_queue *q = &__get_cpu_var(call_single_queue);
+	struct call_single_queue *q = this_cpu_ptr(&call_single_queue);
 	LIST_HEAD(list);
 	static bool warned;
 
@@ -300,7 +300,7 @@ int smp_call_function_single(int cpu, smp_call_func_t func, void *info,
 			struct call_single_data *csd = &d;
 
 			if (!wait)
-				csd = &__get_cpu_var(csd_data);
+				csd = this_cpu_ptr(&csd_data);
 
 			csd_lock(csd);
 
@@ -461,7 +461,7 @@ void smp_call_function_many(const struct cpumask *mask,
 		return;
 	}
 
-	cfd = &__get_cpu_var(cfd_data);
+	cfd = this_cpu_ptr(&cfd_data);
 
 	cpumask_and(cfd->cpumask, mask, cpu_online_mask);
 	cpumask_clear_cpu(this_cpu, cfd->cpumask);
