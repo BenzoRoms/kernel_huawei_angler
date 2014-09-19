@@ -2267,6 +2267,8 @@ static inline void tsk_restore_flags(struct task_struct *task,
 	task->flags |= orig_flags & flags;
 }
 
+extern int task_can_attach(struct task_struct *p,
+			   const struct cpumask *cs_cpus_allowed);
 #ifdef CONFIG_SMP
 struct cpuidle_state;
 extern void do_set_cpus_allowed(struct task_struct *p,
