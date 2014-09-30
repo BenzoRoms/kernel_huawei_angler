@@ -1909,10 +1909,8 @@ void cpufreq_suspend(void)
 	if (!cpufreq_driver)
 		return;
 
-	cpufreq_suspended = true;
-
 	if (!has_target())
-		return;
+		goto suspend;
 
 	pr_debug("%s: Suspending Governors\n", __func__);
 
@@ -1925,6 +1923,9 @@ void cpufreq_suspend(void)
 			pr_err("%s: Failed to suspend driver: %p\n", __func__,
 				policy);
 	}
+
+suspend:
+	cpufreq_suspended = true;
 }
 
 /**
