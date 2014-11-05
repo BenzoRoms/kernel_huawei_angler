@@ -5701,9 +5701,6 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 	int want_sibling = true;
 	int sync = wake_flags & WF_SYNC;
 
-	if (p->nr_cpus_allowed == 1)
-		return prev_cpu;
-
 	/* Check if prev_cpu can fit us ignoring its current usage */
 	if (energy_aware() && !task_fits_capacity(p, prev_cpu))
 		want_sibling = false;
