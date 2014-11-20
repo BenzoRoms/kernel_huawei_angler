@@ -5,6 +5,7 @@
 
 #include <linux/sched/prio.h>
 
+#include <linux/atomic.h>
 
 struct sched_param {
 	int sched_priority;
@@ -134,6 +135,16 @@ struct blk_plug;
 #define VMACACHE_BITS 2
 #define VMACACHE_SIZE (1U << VMACACHE_BITS)
 #define VMACACHE_MASK (VMACACHE_SIZE - 1)
+
+/* This structure is used to share information and statistics with other
+ * frameworks. It only shares wake up latency fro the moment but should be
+ * extended with other usefull informations
+ */
+struct sched_pm {
+	atomic_t  wake_latency; /* time to wake up the cpu */
+};
+
+DECLARE_PER_CPU(struct sched_pm, sched_stat);
 
 /*
  * List of flags we want to share for kernel threads,
