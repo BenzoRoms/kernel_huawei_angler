@@ -454,7 +454,7 @@ __cpufreq_cooling_register(struct device_node *np,
 	struct cpufreq_cooling_device *cpufreq_dev;
 	unsigned int min = 0, max = 0;
 	char dev_name[THERMAL_NAME_LENGTH];
-	int ret = 0, i;
+	int ret, i;
 	struct cpufreq_policy policy;
 
 	/* Verify that all the clip cpus have same freq_min, freq_max limit */
