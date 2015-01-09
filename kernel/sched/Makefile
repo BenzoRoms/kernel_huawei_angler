@@ -1,7 +1,7 @@
 CFLAGS_cpuacct.o := -Wno-tautological-compare
 
 ifdef CONFIG_FUNCTION_TRACER
-CFLAGS_REMOVE_clock.o = -pg
+CFLAGS_REMOVE_clock.o = $(CC_FLAGS_FTRACE)
 endif
 
 ifneq ($(CONFIG_SCHED_OMIT_FRAME_POINTER),y)
