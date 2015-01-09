@@ -10,7 +10,7 @@ CFLAGS_vsprintf.o := -fno-unsafe-math-optimizations -fno-strict-aliasing
 
 ifdef CONFIG_FUNCTION_TRACER
 ORIG_CFLAGS := $(KBUILD_CFLAGS)
-KBUILD_CFLAGS = $(subst -pg,,$(ORIG_CFLAGS))
+KBUILD_CFLAGS = $(subst $(CC_FLAGS_FTRACE),,$(ORIG_CFLAGS))
 endif
 
 lib-y := ctype.o string.o vsprintf.o cmdline.o \
