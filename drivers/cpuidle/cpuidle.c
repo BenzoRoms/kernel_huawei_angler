@@ -143,11 +143,17 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 
 	struct cpuidle_state *target_state = &drv->states[index];
 
+	/* Take note of the planned idle state. */
+	sched_idle_set_state(target_state, index);
+
 	trace_cpu_idle_rcuidle(index, dev->cpu);
 
 	entered_state = target_state->enter(dev, drv, index);
 
 	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, dev->cpu);
+
+	/* The cpu is no longer idle or about to enter idle. */
+	sched_idle_set_state(NULL, -1);
 
 	if (!cpuidle_state_is_coupled(dev, drv, entered_state))
 		local_irq_enable();
