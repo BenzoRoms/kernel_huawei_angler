@@ -1881,8 +1881,6 @@ rcu_check_quiescent_state(struct rcu_state *rsp, struct rcu_data *rdp)
 	rcu_report_qs_rdp(rdp->cpu, rsp, rdp);
 }
 
-#ifdef CONFIG_HOTPLUG_CPU
-
 /*
  * Send the specified CPU's RCU callbacks to the orphanage.  The
  * specified CPU must be offline, and the caller must hold the
@@ -1893,7 +1891,7 @@ rcu_send_cbs_to_orphanage(int cpu, struct rcu_state *rsp,
 			  struct rcu_node *rnp, struct rcu_data *rdp)
 {
 	/* No-CBs CPUs do not have orphanable callbacks. */
-	if (rcu_is_nocb_cpu(rdp->cpu))
+	if (!IS_ENABLED(CONFIG_HOTPLUG_CPU) || rcu_is_nocb_cpu(rdp->cpu))
 		return;
 
 	/*
@@ -1948,7 +1946,8 @@ static void rcu_adopt_orphan_cbs(struct rcu_state *rsp, unsigned long flags)
 	struct rcu_data *rdp = __this_cpu_ptr(rsp->rda);
 
 	/* No-CBs CPUs are handled specially. */
-	if (rcu_nocb_adopt_orphan_cbs(rsp, rdp, flags))
+	if (!IS_ENABLED(CONFIG_HOTPLUG_CPU) ||
+	    rcu_nocb_adopt_orphan_cbs(rsp, rdp, flags))
 		return;
 
 	/* Do the accounting first. */
@@ -1995,6 +1994,9 @@ static void rcu_cleanup_dying_cpu(struct rcu_state *rsp)
 	RCU_TRACE(struct rcu_data *rdp = this_cpu_ptr(rsp->rda));
 	RCU_TRACE(struct rcu_node *rnp = rdp->mynode);
 
+	if (!IS_ENABLED(CONFIG_HOTPLUG_CPU))
+		return;
+
 	RCU_TRACE(mask = rdp->grpmask);
 	trace_rcu_grace_period(rsp->name,
 			       rnp->gpnum + 1 - !!(rnp->qsmask & mask),
@@ -2015,6 +2017,9 @@ static void rcu_cleanup_dead_cpu(int cpu, struct rcu_state *rsp)
 	int need_report = 0;
 	struct rcu_data *rdp = per_cpu_ptr(rsp->rda, cpu);
 	struct rcu_node *rnp = rdp->mynode;  /* Outgoing CPU's rdp & rnp. */
+
+	if (!IS_ENABLED(CONFIG_HOTPLUG_CPU))
+		return;
 
 	/* Adjust any no-longer-needed kthreads. */
 	rcu_boost_kthread_setaffinity(rnp, -1);
@@ -2069,18 +2074,6 @@ static void rcu_cleanup_dead_cpu(int cpu, struct rcu_state *rsp)
 	rdp->nxttail[RCU_NEXT_TAIL] = NULL;
 	mutex_unlock(&rsp->onoff_mutex);
 }
-
-#else /* #ifdef CONFIG_HOTPLUG_CPU */
-
-static void rcu_cleanup_dying_cpu(struct rcu_state *rsp)
-{
-}
-
-static void rcu_cleanup_dead_cpu(int cpu, struct rcu_state *rsp)
-{
-}
-
-#endif /* #else #ifdef CONFIG_HOTPLUG_CPU */
 
 /*
  * Invoke any RCU callbacks that have made it to the end of their grace
