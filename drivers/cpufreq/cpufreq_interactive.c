@@ -484,7 +484,13 @@ static void cpufreq_interactive_timer(unsigned long data)
 	}
 
 	spin_lock_irqsave(&ppol->target_freq_lock, flags);
-	cpu_load = loadadjfreq / ppol->target_freq;
+	/*
+	 * The current cpu freq can be a little inaccurate for calculating cpu
+	 * load since we could have changed frqeuency since the last time we set
+	 * it due to an updated cpufreq policy. This shouldn't happen very often
+	 * though.
+	 */
+	cpu_load = loadadjfreq / ppol->policy->cur;
 #ifdef CONFIG_CPU_BOOST
 	tunables->boosted = check_cpuboost(data) || tunables->boost_val ||
 #else
