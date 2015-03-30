@@ -435,7 +435,7 @@ static int cpu_psci_cpu_kill(unsigned int cpu)
 }
 #endif
 
-static const struct cpu_operations cpu_psci_ops = {
+static struct cpu_operations cpu_psci_ops = {
 	.name		= "psci",
 	.cpu_init	= cpu_psci_cpu_init,
 	.cpu_prepare	= cpu_psci_cpu_prepare,
@@ -447,5 +447,5 @@ static const struct cpu_operations cpu_psci_ops = {
 #endif
 };
 
-CPU_METHOD_OF_DECLARE(psci, &cpu_psci_ops);
+CPU_METHOD_OF_DECLARE(psci, "psci", &cpu_psci_ops);
 #endif
