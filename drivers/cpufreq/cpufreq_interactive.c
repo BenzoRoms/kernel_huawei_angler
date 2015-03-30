@@ -534,7 +534,13 @@ static void cpufreq_interactive_timer(unsigned long data)
 	}
 	spin_unlock(&ppol->load_lock);
 
-	cpu_load = loadadjfreq / ppol->target_freq;
+	/*
+	 * The current cpu freq can be a little inaccurate for calculating cpu
+	 * load since we could have changed frqeuency since the last time we set
+	 * it due to an updated cpufreq policy. This shouldn't happen very often
+	 * though.
+	 */
+	cpu_load = loadadjfreq / ppol->policy->cur;
 	tunables->boosted = tunables->boost_val || now < tunables->boostpulse_endtime;
 
 	if (now - ppol->max_freq_hyst_start_time <
