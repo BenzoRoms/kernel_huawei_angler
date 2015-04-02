@@ -1067,7 +1067,9 @@ select_task_rq_dl(struct task_struct *p, int cpu, int sd_flag, int flags)
 	    (p->nr_cpus_allowed > 1)) {
 		int target = find_later_rq(p);
 
-		if (target != -1)
+                if (target != -1 && 
+                        dl_time_before(p->dl.deadline, 
+                                cpu_rq(target)->dl.earliest_dl.curr)) 
 			cpu = target;
 	}
 	rcu_read_unlock();
