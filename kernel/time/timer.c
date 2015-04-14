@@ -1770,7 +1770,7 @@ EXPORT_SYMBOL(msleep_interruptible);
  * @min: Minimum time in usecs to sleep
  * @max: Maximum time in usecs to sleep
  */
-void usleep_range(unsigned long min, unsigned long max)
+void __sched usleep_range(unsigned long min, unsigned long max)
 {
 	ktime_t exp = ktime_add_us(ktime_get(), min);
 	unsigned long delta = (max - min) * NSEC_PER_USEC;
