@@ -1823,6 +1823,7 @@ out_unlock:
 	double_unlock_hb(hb1, hb2);
 	wake_up_q(&wake_q);
 	hb_waiters_dec(hb2);
+	wake_up_q(&wake_q);
 
 	/*
 	 * drop_futex_key_refs() must be called outside the spinlocks. During
