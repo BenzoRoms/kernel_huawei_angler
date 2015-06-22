@@ -72,6 +72,9 @@
 #define MSS_RESTART_ID			0xA
 
 #define MSS_MAGIC			0XAABADEAD
+enum scm_cmd {
+	PAS_MEM_SETUP_CMD = 2,
+};
 
 static int pbl_mba_boot_timeout_ms = 1000;
 module_param(pbl_mba_boot_timeout_ms, int, S_IRUGO | S_IWUSR);
@@ -268,6 +271,18 @@ int pil_mss_shutdown(struct pil_desc *pil)
 	if (drv->axi_halt_nc)
 		pil_q6v5_halt_axi_port(pil, drv->axi_halt_nc);
 
+	/*
+	 * Software workaround to avoid high MX current during LPASS/MSS
+	 * restart.
+	 */
+	if (drv->mx_spike_wa && drv->ahb_clk_vote) {
+		ret = clk_prepare_enable(drv->ahb_clk);
+		if (!ret)
+			assert_clamps(pil);
+		else
+			dev_err(pil->dev, "error turning ON AHB clock\n");
+	}
+
 	ret = pil_mss_restart_reg(drv, 1);
 
 	if (drv->is_booted) {
@@ -358,6 +373,44 @@ void pil_mss_remove_proxy_votes(struct pil_desc *pil)
 	pil_q6v5_remove_proxy_votes(pil);
 	regulator_disable(drv->vreg_mx);
 	regulator_set_voltage(drv->vreg_mx, 0, INT_MAX);
+}
+
+static int pil_mss_mem_setup(struct pil_desc *pil,
+					phys_addr_t addr, size_t size)
+{
+	struct modem_data *md = dev_get_drvdata(pil->dev);
+
+	struct pas_init_image_req {
+		u32	proc;
+		u32	start_addr;
+		u32	len;
+	} request;
+	u32 scm_ret = 0;
+	int ret;
+	struct scm_desc desc = {0};
+
+	if (!md->subsys_desc.pil_mss_memsetup)
+		return 0;
+
+	request.proc = md->pas_id;
+	request.start_addr = addr;
+	request.len = size;
+
+	if (!is_scm_armv8()) {
+		ret = scm_call(SCM_SVC_PIL, PAS_MEM_SETUP_CMD, &request,
+				sizeof(request), &scm_ret, sizeof(scm_ret));
+	} else {
+		desc.args[0] = md->pas_id;
+		desc.args[1] = addr;
+		desc.args[2] = size;
+		desc.arginfo = SCM_ARGS(3);
+		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_MEM_SETUP_CMD),
+				&desc);
+		scm_ret = desc.ret[0];
+	}
+	if (ret)
+		return ret;
+	return scm_ret;
 }
 
 static int pil_mss_reset(struct pil_desc *pil)
@@ -650,6 +703,7 @@ struct pil_reset_ops pil_msa_mss_ops_selfauth = {
 	.init_image = pil_msa_mss_reset_mba_load_auth_mdt,
 	.proxy_vote = pil_mss_make_proxy_votes,
 	.proxy_unvote = pil_mss_remove_proxy_votes,
+	.mem_setup = pil_mss_mem_setup,
 	.verify_blob = pil_msa_mba_verify_blob,
 	.auth_and_reset = pil_msa_mba_auth,
 	.deinit_image = pil_mss_deinit_image,
