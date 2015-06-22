@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,7 +25,7 @@
 #include <linux/skbuff.h>
 #include <linux/debugfs.h>
 #include <linux/clk.h>
-#include <linux/wakelock.h>
+#include <linux/pm.h>
 #include <linux/of.h>
 #include <linux/ipc_logging.h>
 #include <linux/srcu.h>
@@ -131,13 +131,9 @@ static atomic_t bam_dmux_a2_pwr_cntl_in_cnt = ATOMIC_INIT(0);
 				 bam_dmux_write_cpy_bytes);                 \
 	} while (0)
 
-#define DBG_INC_TX_SPS_FAILURE_CNT() do {	\
-		bam_dmux_tx_sps_failure_cnt++;		\
-} while (0)
+#define DBG_INC_TX_SPS_FAILURE_CNT() (bam_dmux_tx_sps_failure_cnt++)
 
-#define DBG_INC_TX_STALL_CNT() do { \
-	bam_dmux_tx_stall_cnt++; \
-} while (0)
+#define DBG_INC_TX_STALL_CNT() (bam_dmux_tx_stall_cnt++)
 
 #define DBG_INC_ACK_OUT_CNT() \
 	atomic_inc(&bam_dmux_ack_out_cnt)
@@ -261,7 +257,7 @@ static DEFINE_RWLOCK(ul_wakeup_lock);
 static DECLARE_WORK(kickoff_ul_wakeup, kickoff_ul_wakeup_func);
 static int bam_connection_is_active;
 static int wait_for_ack;
-static struct wake_lock bam_wakelock;
+static struct wakeup_source bam_wakelock;
 static int a2_pc_disabled;
 static DEFINE_MUTEX(dfab_status_lock);
 static int dfab_is_on;
@@ -317,7 +313,7 @@ static void *bam_ipc_log_txt;
 
 /**
  * Log a state change along with a small message.
- * Complete size of messsage is limited to @todo.
+ * Complete size of message is limited to @todo.
  * Logging is done using IPC Logging infrastructure.
  *
  * States
@@ -488,7 +484,7 @@ static void queue_rx_work_func(struct work_struct *work)
 {
 	/*
 	 * Cold path.  Delays can be tolerated.  Use of GFP_KERNEL should
-	 * guarentee the requested memory will be found, after some ammount of
+	 * guarantee the requested memory will be found, after some ammount of
 	 * delay.
 	 */
 	__queue_rx(GFP_KERNEL);
@@ -834,8 +830,8 @@ static void bam_mux_write_done(struct work_struct *work)
 	if (unlikely(info != info_expected)) {
 		struct tx_pkt_info *errant_pkt;
 
-		DMUX_LOG_KERR("%s: bam_tx_pool mismatch .next=%p,"
-				" list_node=%p, ts=%u.%09lu\n",
+		DMUX_LOG_KERR(
+				"%s: bam_tx_pool mismatch .next=%p, list_node=%p, ts=%u.%09lu\n",
 				__func__, bam_tx_pool.next, &info->list_node,
 				info->ts_sec, info->ts_nsec
 				);
@@ -922,14 +918,17 @@ int msm_bam_dmux_write(uint32_t id, struct sk_buff *skb)
 
 	read_lock(&ul_wakeup_lock);
 	if (!bam_is_connected) {
+		atomic_inc(&ul_ondemand_vote);
 		read_unlock(&ul_wakeup_lock);
 		ul_wakeup();
 		if (unlikely(in_global_reset == 1)) {
 			srcu_read_unlock(&bam_dmux_srcu, rcu_id);
+			atomic_dec(&ul_ondemand_vote);
 			return -EFAULT;
 		}
 		read_lock(&ul_wakeup_lock);
 		notify_all(BAM_DMUX_UL_CONNECTED, (unsigned long)(NULL));
+		atomic_dec(&ul_ondemand_vote);
 	}
 
 	/* if skb do not have any tailroom for padding,
@@ -1129,14 +1128,17 @@ int msm_bam_dmux_open(uint32_t id, void *priv,
 
 	read_lock(&ul_wakeup_lock);
 	if (!bam_is_connected) {
+		atomic_inc(&ul_ondemand_vote);
 		read_unlock(&ul_wakeup_lock);
 		ul_wakeup();
 		if (unlikely(in_global_reset == 1)) {
+			atomic_dec(&ul_ondemand_vote);
 			kfree(hdr);
 			return -EFAULT;
 		}
 		read_lock(&ul_wakeup_lock);
 		notify_all(BAM_DMUX_UL_CONNECTED, (unsigned long)(NULL));
+		atomic_dec(&ul_ondemand_vote);
 	}
 
 	hdr->magic_num = BAM_MUX_HDR_MAGIC_NO;
@@ -1168,12 +1170,16 @@ int msm_bam_dmux_close(uint32_t id)
 
 	read_lock(&ul_wakeup_lock);
 	if (!bam_is_connected && !bam_ch_is_in_reset(id)) {
+		atomic_inc(&ul_ondemand_vote);
 		read_unlock(&ul_wakeup_lock);
 		ul_wakeup();
-		if (unlikely(in_global_reset == 1))
+		if (unlikely(in_global_reset == 1)) {
+			atomic_dec(&ul_ondemand_vote);
 			return -EFAULT;
+		}
 		read_lock(&ul_wakeup_lock);
 		notify_all(BAM_DMUX_UL_CONNECTED, (unsigned long)(NULL));
+		atomic_dec(&ul_ondemand_vote);
 	}
 
 	spin_lock_irqsave(&bam_ch[id].lock, flags);
@@ -1489,7 +1495,7 @@ static void bam_mux_tx_notify(struct sps_event_notify *notify)
 		queue_work(bam_mux_tx_workqueue, &pkt->work);
 		break;
 	default:
-		pr_err("%s: recieved unexpected event id %d\n", __func__,
+		pr_err("%s: received unexpected event id %d\n", __func__,
 			notify->event_id);
 	}
 }
@@ -1511,8 +1517,8 @@ static void bam_mux_rx_notify(struct sps_event_notify *notify)
 			ret = bam_ops->sps_get_config_ptr(bam_rx_pipe,
 					&cur_rx_conn);
 			if (ret) {
-				pr_err("%s: sps_get_config() failed %d, interrupts"
-					" not disabled\n", __func__, ret);
+				pr_err("%s: sps_get_config() failed %d, interrupts not disabled\n",
+					__func__, ret);
 				break;
 			}
 			cur_rx_conn.options = SPS_O_AUTO_ENABLE |
@@ -1520,8 +1526,8 @@ static void bam_mux_rx_notify(struct sps_event_notify *notify)
 			ret = bam_ops->sps_set_config_ptr(bam_rx_pipe,
 					&cur_rx_conn);
 			if (ret) {
-				pr_err("%s: sps_set_config() failed %d, interrupts"
-					" not disabled\n", __func__, ret);
+				pr_err("%s: sps_set_config() failed %d, interrupts not disabled\n",
+					__func__, ret);
 				break;
 			}
 			INIT_COMPLETION(shutdown_completion);
@@ -1540,7 +1546,7 @@ static void bam_mux_rx_notify(struct sps_event_notify *notify)
 		}
 		break;
 	default:
-		pr_err("%s: recieved unexpected event id %d\n", __func__,
+		pr_err("%s: received unexpected event id %d\n", __func__,
 			notify->event_id);
 	}
 }
@@ -1615,6 +1621,7 @@ static ssize_t debug_read(struct file *file, char __user *buf,
 {
 	int (*fill)(char *buf, int max) = file->private_data;
 	int bsize = fill(debug_buffer, DEBUG_BUFMAX);
+
 	return simple_read_from_buffer(buf, count, ppos, debug_buffer, bsize);
 }
 
@@ -1679,13 +1686,17 @@ static void kickoff_ul_wakeup_func(struct work_struct *work)
 {
 	read_lock(&ul_wakeup_lock);
 	if (!bam_is_connected) {
+		atomic_inc(&ul_ondemand_vote);
 		read_unlock(&ul_wakeup_lock);
 		ul_wakeup();
-		if (unlikely(in_global_reset == 1))
+		if (unlikely(in_global_reset == 1)) {
+			atomic_dec(&ul_ondemand_vote);
 			return;
+		}
 		read_lock(&ul_wakeup_lock);
 		ul_packet_written = 1;
 		notify_all(BAM_DMUX_UL_CONNECTED, (unsigned long)(NULL));
+		atomic_dec(&ul_ondemand_vote);
 	}
 	read_unlock(&ul_wakeup_lock);
 }
@@ -2144,7 +2155,7 @@ static void grab_wakelock(void)
 	BAM_DMUX_LOG("%s: ref count = %d\n", __func__,
 						wakelock_reference_count);
 	if (wakelock_reference_count == 0)
-		wake_lock(&bam_wakelock);
+		__pm_stay_awake(&bam_wakelock);
 	++wakelock_reference_count;
 	spin_unlock_irqrestore(&wakelock_reference_lock, flags);
 }
@@ -2164,7 +2175,7 @@ static void release_wakelock(void)
 						wakelock_reference_count);
 	--wakelock_reference_count;
 	if (wakelock_reference_count == 0)
-		wake_unlock(&bam_wakelock);
+		__pm_relax(&bam_wakelock);
 	spin_unlock_irqrestore(&wakelock_reference_lock, flags);
 }
 
@@ -2750,7 +2761,7 @@ static int bam_dmux_probe(struct platform_device *pdev)
 	init_completion(&shutdown_completion);
 	complete_all(&shutdown_completion);
 	INIT_DELAYED_WORK(&ul_timeout_work, ul_timeout);
-	wake_lock_init(&bam_wakelock, WAKE_LOCK_SUSPEND, "bam_dmux_wakelock");
+	wakeup_source_init(&bam_wakelock, "bam_dmux_wakelock");
 	init_srcu_struct(&bam_dmux_srcu);
 
 	subsys_h = subsys_notif_register_notifier("modem", &restart_notifier);
@@ -2829,9 +2840,8 @@ static int __init bam_dmux_init(void)
 
 	bam_ipc_log_txt = ipc_log_context_create(BAM_IPC_LOG_PAGES, "bam_dmux",
 			0);
-	if (!bam_ipc_log_txt) {
+	if (!bam_ipc_log_txt)
 		pr_err("%s : unable to create IPC Logging Context", __func__);
-	}
 
 	rx_timer_interval = DEFAULT_POLLING_MIN_SLEEP;
 
