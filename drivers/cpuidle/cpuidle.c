@@ -122,7 +122,9 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 
 	trace_cpu_idle_rcuidle(index, dev->cpu);
 
+	stop_critical_timings();
 	entered_state = target_state->enter(dev, drv, index);
+	start_critical_timings();
 
 	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, dev->cpu);
 

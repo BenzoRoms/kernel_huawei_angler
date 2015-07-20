@@ -116,12 +116,6 @@ static void cpuidle_idle_call(void)
 	}
 
 	/*
-	 * During the idle period, stop measuring the disabled irqs
-	 * critical sections latencies
-	 */
-	stop_critical_timings();
-
-	/*
 	 * Tell the RCU framework we are entering an idle section,
 	 * so no more rcu read side critical sections and one more
 	 * step to the grace period
@@ -194,7 +188,6 @@ exit_idle:
 		local_irq_enable();
 
 	rcu_idle_exit();
-	start_critical_timings();
 	return;
 
 use_default:
@@ -202,11 +195,13 @@ use_default:
 	 * We can't use the cpuidle framework, let's use the default
 	 * idle routine.
 	 */
-	if (current_clr_polling_and_test())
+	if (current_clr_polling_and_test()) {
 		local_irq_enable();
-	else
+	} else {
+		stop_critical_timings();
 		arch_cpu_idle();
-
+		start_critical_timings();
+	}
 	goto exit_idle;
 }
 
