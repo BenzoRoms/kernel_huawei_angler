@@ -529,7 +529,12 @@ static void cpufreq_interactive_timer(unsigned long data)
 
 	spin_lock_irqsave(&ppol->target_freq_lock, flags);
 	cpu_load = loadadjfreq / ppol->target_freq;
-	tunables->boosted = tunables->boost_val || now < tunables->boostpulse_endtime;
+#ifdef CONFIG_CPU_BOOST
+	tunables->boosted = check_cpuboost(data) || tunables->boost_val ||
+#else
+	tunables->boosted = tunables->boost_val ||
+#endif
+	now < tunables->boostpulse_endtime;
 	this_hispeed_freq = max(tunables->hispeed_freq, ppol->policy->min);
 	this_hispeed_freq = min(this_hispeed_freq, ppol->policy->max);
 
