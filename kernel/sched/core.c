@@ -3054,12 +3054,14 @@ static int cpufreq_notifier_policy(struct notifier_block *nb,
 	unsigned int orig_min_max_freq = min_max_freq;
 	unsigned int orig_max_possible_freq = max_possible_freq;
 	/* Initialized to policy->max in case policy->related_cpus is empty! */
+	unsigned int orig_max_freq = policy->max;
 	struct sched_cluster *cluster = NULL;
 
-	if (val != CPUFREQ_NOTIFY && val != CPUFREQ_REMOVE_POLICY)
+	if (val != CPUFREQ_NOTIFY && val != CPUFREQ_REMOVE_POLICY &&
+						val != CPUFREQ_CREATE_POLICY)
 		return 0;
 
-	if (val == CPUFREQ_REMOVE_POLICY) {
+	if (val == CPUFREQ_REMOVE_POLICY || val == CPUFREQ_CREATE_POLICY) {
 		update_min_max_capacity();
 		return 0;
 	}
