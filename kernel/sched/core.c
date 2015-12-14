@@ -118,8 +118,8 @@ const char *task_event_names[] = {"PUT_PREV_TASK", "PICK_NEXT_TASK",
 				  "TASK_WAKE", "TASK_MIGRATE", "TASK_UPDATE",
 				"IRQ_UPDATE"};
 
-ATOMIC_NOTIFIER_HEAD(migration_notifier_head);
-ATOMIC_NOTIFIER_HEAD(load_alert_notifier_head);
+//ATOMIC_NOTIFIER_HEAD(migration_notifier_head);
+//ATOMIC_NOTIFIER_HEAD(load_alert_notifier_head);
 
 #ifdef smp_mb__before_atomic
 void __smp_mb__before_atomic(void)
@@ -3366,9 +3366,9 @@ void set_numabalancing_state(bool enabled)
 /*
  * fork()/clone()-time setup:
  */
-void sched_fork(struct task_struct *p)
+void sched_fork(unsigned long flags, struct task_struct *p)
 {
-	unsigned long flags;
+	//unsigned long flags;
 	int cpu = get_cpu();
 
 	__sched_fork(p);
@@ -4529,7 +4529,7 @@ void __kprobes add_preempt_count(int val)
 	if (DEBUG_LOCKS_WARN_ON((preempt_count() < 0)))
 		return;
 #endif
-	add_preempt_count_notrace(val);
+	preempt_count() += val;
 #ifdef CONFIG_DEBUG_PREEMPT
 	/*
 	 * Spinlock count overflowing soon?
@@ -4560,7 +4560,7 @@ void __kprobes sub_preempt_count(int val)
 
 	if (preempt_count() == val)
 		trace_preempt_on(CALLER_ADDR0, get_parent_ip(CALLER_ADDR1));
-	sub_preempt_count_notrace(val);
+	preempt_count() -= val;
 }
 EXPORT_SYMBOL(sub_preempt_count);
 
