@@ -88,7 +88,6 @@
 #include <linux/flex_array.h>
 #include <linux/posix-timers.h>
 #include <linux/qmp_sphinx_instrumentation.h>
-#include <linux/cpufreq.h>
 #ifdef CONFIG_HARDWALL
 #include <asm/hardwall.h>
 #endif
@@ -1327,11 +1326,14 @@ static int sched_wake_up_idle_show(struct seq_file *m, void *v)
 	if (!p)
 		return -ESRCH;
 
+#ifdef TJK_HMP
 	seq_printf(m, "%d\n", sched_get_wake_up_idle(p));
 
 	put_task_struct(p);
-
 	return 0;
+#else
+	return -EINVAL;
+#endif
 }
 
 static ssize_t
@@ -1359,9 +1361,13 @@ sched_wake_up_idle_write(struct file *file, const char __user *buf,
 	if (!p)
 		return -ESRCH;
 
+#ifdef TJK_HMP
 	err = sched_set_wake_up_idle(p, wake_up_idle);
 
 	put_task_struct(p);
+#else
+	err = -EINVAL;
+#endif
 
 out:
 	return err < 0 ? err : count;
@@ -2826,47 +2832,6 @@ static int proc_pid_personality(struct seq_file *m, struct pid_namespace *ns,
 	return err;
 }
 
-#ifdef CONFIG_TASK_CPUFREQ_STATS
-static int cpufreq_stats_show(struct seq_file *m, void *v)
-{
-	struct inode *inode = m->private;
-	struct task_struct *p;
-	unsigned int *freq_table = NULL;
-	int cpu, i, max_state;
-	p = get_proc_task(inode);
-	if (!p)
-		return -ESRCH;
-	for (cpu = 0; cpu < NR_CPUS; cpu++) {
-		max_state = p->cpufreq_stats[cpu].max_state;
-		if(max_state > 0) {
-			freq_table = kmalloc(max_state * sizeof(unsigned int),
-					     GFP_KERNEL);
-			update_freq_table(freq_table, cpu, max_state);
-			for (i = 0; i < max_state; i++) {
-				seq_printf(m, "%d  %u  %llu\n", cpu,
-					   freq_table[i],
-					   (unsigned long long)jiffies_64_to_clock_t(
-							   p->cpufreq_stats[cpu].cumulative_time_in_state[i]));
-			}
-			kfree(freq_table);
-		}
-	}
-	put_task_struct(p);
-	return 0;
-}
-
-static int cpufreq_stats_open(struct inode *inode, struct file *filp)
-{
-	return single_open(filp, cpufreq_stats_show, inode);
-}
-
-static const struct file_operations proc_pid_cpufreq_stats_operations = {
-	.open           = cpufreq_stats_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-#endif
 /*
  * Thread groups
  */
@@ -2897,9 +2862,6 @@ static const struct pid_entry tgid_base_stuff[] = {
 #endif
 #ifdef CONFIG_SCHED_DEBUG
 	REG("sched",      S_IRUGO|S_IWUSR, proc_pid_sched_operations),
-#endif
-#ifdef CONFIG_TASK_CPUFREQ_STATS
-	REG("cpufreq_stats",      S_IRUGO|S_IWUSR, proc_pid_cpufreq_stats_operations),
 #endif
 #ifdef CONFIG_SCHED_AUTOGROUP
 	REG("autogroup",  S_IRUGO|S_IWUSR, proc_pid_sched_autogroup_operations),
@@ -3261,9 +3223,6 @@ static const struct pid_entry tid_base_stuff[] = {
 #endif
 #ifdef CONFIG_SCHED_DEBUG
 	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
-#endif
-#ifdef CONFIG_TASK_CPUFREQ_STATS
-	REG("cpufreq_stats",      S_IRUGO|S_IWUSR, proc_pid_cpufreq_stats_operations),
 #endif
 	REG("comm",      S_IRUGO|S_IWUSR, proc_pid_set_comm_operations),
 #ifdef CONFIG_HAVE_ARCH_TRACEHOOK
