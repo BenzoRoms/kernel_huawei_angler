@@ -114,4 +114,7 @@ static inline bool verify_mem_not_deleted(const void *x)
 }
 #endif
 
+void object_err(struct kmem_cache *s, struct page *page,
+		u8 *object, char *reason);
+
 #endif /* _LINUX_SLUB_DEF_H */
