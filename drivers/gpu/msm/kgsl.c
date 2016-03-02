@@ -926,12 +926,14 @@ static struct kgsl_process_private *kgsl_process_private_new(
 	/* Allocate a pagetable for the new process object */
 	if (kgsl_mmu_enabled()) {
 		private->pagetable = kgsl_mmu_getpagetable(&device->mmu, tgid);
-		if (private->pagetable == NULL) {
+		if (IS_ERR(private->pagetable)) {
+			int err = PTR_ERR(private->pagetable);
+
 			idr_destroy(&private->mem_idr);
 			idr_destroy(&private->syncsource_idr);
 
 			kfree(private);
-			private = ERR_PTR(-ENOMEM);
+			private = ERR_PTR(err);
 		}
 	}
 
@@ -1089,25 +1091,28 @@ static void device_release_contexts(struct kgsl_device_private *dev_priv)
 	struct kgsl_device *device = dev_priv->device;
 	struct kgsl_context *context;
 	int next = 0;
+	int result = 0;
 
 	while (1) {
 		read_lock(&device->context_lock);
 		context = idr_get_next(&device->context_idr, &next);
-		read_unlock(&device->context_lock);
 
-		if (context == NULL)
+		if (context == NULL) {
+			read_unlock(&device->context_lock);
 			break;
-
-		if (context->dev_priv == dev_priv) {
+		} else if (context->dev_priv == dev_priv) {
 			/*
 			 * Hold a reference to the context in case somebody
 			 * tries to put it while we are detaching
 			 */
+			result = _kgsl_context_get(context);
+		}
+		read_unlock(&device->context_lock);
 
-			if (_kgsl_context_get(context)) {
-				kgsl_context_detach(context);
-				kgsl_context_put(context);
-			}
+		if (result) {
+			kgsl_context_detach(context);
+			kgsl_context_put(context);
+			result = 0;
 		}
 
 		next = next + 1;
@@ -1366,16 +1371,15 @@ kgsl_sharedmem_region_empty(struct kgsl_process_private *private,
 static inline struct kgsl_mem_entry * __must_check
 kgsl_sharedmem_find_id(struct kgsl_process_private *process, unsigned int id)
 {
-	int result = 0;
+	int result;
 	struct kgsl_mem_entry *entry;
 
 	spin_lock(&process->mem_lock);
 	entry = idr_find(&process->mem_idr, id);
-	if (entry)
-		result = kgsl_mem_entry_get(entry);
+	result = kgsl_mem_entry_get(entry);
 	spin_unlock(&process->mem_lock);
 
-	if (!result)
+	if (result == 0)
 		return NULL;
 	return entry;
 }
@@ -1591,7 +1595,7 @@ void kgsl_dump_syncpoints(struct kgsl_device *device,
 		}
 		case KGSL_CMD_SYNCPOINT_TYPE_FENCE:
 			if (event->handle)
-				dev_err(device->dev, "  fence: [%p] %s\n",
+				dev_err(device->dev, "  fence: [%pK] %s\n",
 					event->handle->fence,
 					event->handle->name);
 			else
@@ -2902,7 +2906,8 @@ static int kgsl_setup_useraddr(struct kgsl_mem_entry *entry,
 	struct vm_area_struct *vma = NULL;
 	int ret;
 
-	if (param->offset != 0 || param->hostptr == 0
+	if (param->len == 0 || param->offset != 0
+		|| param->hostptr == 0
 		|| !KGSL_IS_PAGE_ALIGNED(param->hostptr)
 		|| !KGSL_IS_PAGE_ALIGNED(param->len))
 		return -EINVAL;
@@ -3968,7 +3973,8 @@ kgsl_mmap_memstore(struct kgsl_device *device, struct vm_area_struct *vma)
 static void kgsl_gpumem_vm_open(struct vm_area_struct *vma)
 {
 	struct kgsl_mem_entry *entry = vma->vm_private_data;
-	if (!kgsl_mem_entry_get(entry))
+
+	if (kgsl_mem_entry_get(entry) == 0)
 		vma->vm_private_data = NULL;
 }
 
@@ -4756,7 +4762,7 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 				PM_QOS_DEFAULT_VALUE);
 
 
-	device->events_wq = create_workqueue("kgsl-events");
+	device->events_wq = create_singlethread_workqueue("kgsl-events");
 
 	/* Initalize the snapshot engine */
 	kgsl_device_snapshot_init(device);
@@ -4842,7 +4848,7 @@ static void kgsl_core_exit(void)
 static int __init kgsl_core_init(void)
 {
 	int result = 0;
-	struct sched_param param = { .sched_priority = 2 };
+	struct sched_param param = { .sched_priority = 3 };
 
 	/* alloc major and minor device numbers */
 	result = alloc_chrdev_region(&kgsl_driver.major, 0, KGSL_DEVICE_MAX,
