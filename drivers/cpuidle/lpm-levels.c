@@ -1222,7 +1222,6 @@ static int lpm_cpuidle_select(struct cpuidle_driver *drv,
 	if (idx < 0)
 		return -EPERM;
 
-	trace_cpu_idle_rcuidle(idx, dev->cpu);
 	return idx;
 }
 
@@ -1298,7 +1297,6 @@ static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 	sched_set_cpu_cstate(smp_processor_id(), 0, &drv->states[0], 0, 0);
 
 exit:
-	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, dev->cpu);
 	end_time = ktime_to_ns(ktime_get()) - start_time;
 	do_div(end_time, 1000);
 	dev->last_residency = end_time;
