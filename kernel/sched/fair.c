@@ -4374,6 +4374,7 @@ void update_cpu_load_nohz(void)
 
 	raw_spin_lock(&this_rq->lock);
 	pending_updates = curr_jiffies - this_rq->last_load_update_tick;
+	update_rq_clock(this_rq);
 	if (pending_updates) {
 		this_rq->last_load_update_tick = curr_jiffies;
 		/*
