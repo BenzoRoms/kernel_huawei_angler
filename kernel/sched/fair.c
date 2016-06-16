@@ -4949,6 +4949,7 @@ static unsigned int sched_group_energy(struct energy_env *eenv)
 		if (cpumask_test_cpu(cpu, &visit_cpus))
 			break;
 next_cpu:
+		cpumask_clear_cpu(cpu, &visit_cpus);
 		continue;
 	}
 
