@@ -710,7 +710,7 @@ static u64 sched_vslice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 }
 
 #ifdef CONFIG_SMP
-static int select_idle_sibling(struct task_struct *p, int cpu);
+static int select_idle_sibling(struct task_struct *p, int prev_cpu, int cpu);
 static unsigned long task_h_load(struct task_struct *p);
 
 static inline void __update_task_entity_contrib(struct sched_entity *se);
@@ -1332,7 +1332,8 @@ balance:
 	 * Call select_idle_sibling to maybe find a better one.
 	 */
 	if (!cur)
-		env->dst_cpu = select_idle_sibling(env->p, env->dst_cpu);
+		env->dst_cpu = select_idle_sibling(env->p, env->src_cpu,
+						   env->dst_cpu);
 
 assign:
 	task_numa_assign(env, cur, imp);
@@ -5100,11 +5101,12 @@ static int wake_wide(struct task_struct *p)
 	return 0;
 }
 
-static int wake_affine(struct sched_domain *sd, struct task_struct *p, int sync)
+static int wake_affine(struct sched_domain *sd, struct task_struct *p,
+		       int prev_cpu, int sync)
 {
 	s64 this_load, load;
 	s64 this_eff_load, prev_eff_load;
-	int idx, this_cpu, prev_cpu;
+	int idx, this_cpu;
 	struct task_group *tg;
 	unsigned long weight;
 	int balanced;
@@ -5118,7 +5120,6 @@ static int wake_affine(struct sched_domain *sd, struct task_struct *p, int sync)
 
 	idx	  = sd->wake_idx;
 	this_cpu  = smp_processor_id();
-	prev_cpu  = task_cpu(p);
 	load	  = source_load(prev_cpu, idx);
 	this_load = target_load(this_cpu, idx);
 
@@ -5501,11 +5502,10 @@ find_idlest_cpu(struct sched_group *group, struct task_struct *p, int this_cpu)
 /*
  * Try and locate an idle CPU in the sched_domain.
  */
-static int select_idle_sibling(struct task_struct *p, int target)
+static int select_idle_sibling(struct task_struct *p, int prev, int target)
 {
 	struct sched_domain *sd;
 	struct sched_group *sg;
-	int i = task_cpu(p);
 	int best_idle = -1;
 	int best_idle_cstate = -1;
 	int best_idle_capacity = INT_MAX;
@@ -5516,8 +5516,8 @@ static int select_idle_sibling(struct task_struct *p, int target)
 	/*
 	 * If the prevous cpu is cache affine and idle, don't be stupid.
 	 */
-	if (i != target && cpus_share_cache(i, target) && idle_cpu(i))
-		return i;
+	if (prev != target && cpus_share_cache(prev, target) && idle_cpu(prev))
+		return prev;
 #endif
 
 	/*
@@ -5527,6 +5527,8 @@ static int select_idle_sibling(struct task_struct *p, int target)
 	for_each_lower_domain(sd) {
 		sg = sd->groups;
 		do {
+			int i;
+
 			if (!cpumask_intersects(sched_group_cpus(sg),
 						tsk_cpus_allowed(p)))
 				goto next;
@@ -5775,14 +5777,14 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 			sd = tmp;
 	}
 
-	if (affine_sd && cpu != prev_cpu && wake_affine(affine_sd, p, sync))
+	if (affine_sd && cpu != prev_cpu && wake_affine(affine_sd, p, prev_cpu, sync))
 		prev_cpu = cpu;
 
 	if (sd_flag & SD_BALANCE_WAKE && want_sibling) {
 		if (energy_aware() && !cpu_rq(cpu)->rd->overutilized)
 			new_cpu = energy_aware_wake_cpu(p, prev_cpu, sync);
 		else
-			new_cpu = select_idle_sibling(p, prev_cpu);
+			new_cpu = select_idle_sibling(p, prev_cpu, new_cpu);
 		goto unlock;
 	}
 
