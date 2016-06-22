@@ -44,7 +44,7 @@
 #define DEFAULT_DOWN_LOCK_DUR		  500
 #define NUM_LITTLE_CORES		  4
 #define NUM_BIG_CORES			  4
-#define MSM_MPDEC_IDLE_FREQ		  384000
+#define MSM_MPDEC_IDLE_FREQ		  302400
 
 enum {
 	MSM_MPDEC_DISABLED = 0,
