@@ -7413,7 +7413,8 @@ static inline void update_sd_lb_stats(struct lb_env *env, struct sd_lb_stats *sd
 
 next_group:
 		/* Now, start updating sd_lb_stats */
-		sds->total_load += sgs->group_load;
+		sds->total_load += sgs->group_load * sgs->group_capacity /
+			SCHED_CAPACITY_SCALE / sgs->group_weight;
 		sds->total_capacity += sgs->group_capacity;
 
 		sg = sg->next;
@@ -7494,7 +7495,7 @@ void fix_small_imbalance(struct lb_env *env, struct sd_lb_stats *sds)
 {
 	unsigned long tmp, capa_now = 0, capa_move = 0;
 	unsigned int imbn = 2;
-	unsigned long scaled_busy_load_per_task;
+	unsigned long scaled_busy_load_per_task, scaled_local_load_per_task;;
 	struct sg_lb_stats *local, *busiest;
 
 	local = &sds->local_stat;
@@ -7509,8 +7510,12 @@ void fix_small_imbalance(struct lb_env *env, struct sd_lb_stats *sds)
 		(busiest->load_per_task * SCHED_CAPACITY_SCALE) /
 		busiest->group_capacity;
 
+	scaled_local_load_per_task =
+		(busiest->load_per_task * SCHED_CAPACITY_SCALE) /
+		local->group_capacity;
+
 	if (busiest->avg_load + scaled_busy_load_per_task >=
-	    local->avg_load + (scaled_busy_load_per_task * imbn)) {
+	    local->avg_load + (scaled_local_load_per_task * imbn)) {
 		env->imbalance = busiest->load_per_task;
 		return;
 	}
