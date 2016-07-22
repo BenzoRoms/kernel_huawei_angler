@@ -470,6 +470,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	bool policy_max_fast_restore = false;
 	bool jump_to_max = false;
 	bool display_on = is_display_on();
+	unsigned int this_hispeed_freq;
 
 	if (!down_read_trylock(&ppol->enable_sem))
 		return;
@@ -548,6 +549,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	 */
 	cpu_load = loadadjfreq / ppol->policy->cur;
 	tunables->boosted = tunables->boost_val || now < tunables->boostpulse_endtime;
+	this_hispeed_freq = max(tunables->hispeed_freq, ppol->policy->min);
 
 	if (now - ppol->max_freq_hyst_start_time <
 	    tunables->max_freq_hysteresis &&
@@ -563,27 +565,27 @@ static void cpufreq_interactive_timer(unsigned long data)
 	} else if (skip_hispeed_logic) {
 		new_freq = choose_freq(ppol, loadadjfreq);
 	} else if (cpu_load >= tunables->go_hispeed_load || tunables->boosted) {
-		if (ppol->target_freq < tunables->hispeed_freq) {
-			new_freq = tunables->hispeed_freq;
+		if (ppol->target_freq < this_hispeed_freq) {
+			new_freq = this_hispeed_freq;
 		} else {
 			new_freq = choose_freq(ppol, loadadjfreq);
 
-			if (new_freq < tunables->hispeed_freq)
-				new_freq = tunables->hispeed_freq;
+			if (new_freq < this_hispeed_freq)
+				new_freq = this_hispeed_freq;
 		}
 	} else {
 		new_freq = choose_freq(ppol, loadadjfreq);
-		if (new_freq > tunables->hispeed_freq &&
-				ppol->policy->cur < tunables->hispeed_freq)
-			new_freq = tunables->hispeed_freq;
+		if (new_freq > this_hispeed_freq &&
+				ppol->policy->cur < this_hispeed_freq)
+			new_freq = this_hispeed_freq;
 	}
 
 	if (now - ppol->max_freq_hyst_start_time <
 	    tunables->max_freq_hysteresis)
-		new_freq = max(tunables->hispeed_freq, new_freq);
+		new_freq = max(this_hispeed_freq, new_freq);
 
 	if (!skip_hispeed_logic &&
-	    ppol->target_freq >= tunables->hispeed_freq &&
+	    ppol->target_freq >= this_hispeed_freq &&
 	    new_freq > ppol->target_freq &&
 	    now - ppol->hispeed_validate_time <
 	    freq_to_above_hispeed_delay(tunables, ppol->target_freq)) {
@@ -631,7 +633,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	 * min_sample_time.
 	 */
 
-	if ((!tunables->boosted || new_freq > tunables->hispeed_freq)
+	if ((!tunables->boosted || new_freq > this_hispeed_freq)
 	    && !policy_max_fast_restore) {
 		ppol->floor_freq = new_freq;
 		ppol->floor_validate_time = now;
