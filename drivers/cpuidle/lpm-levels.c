@@ -1001,6 +1001,9 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 
 		do_div(us, NSEC_PER_SEC/SCLK_HZ);
 		msm_mpm_enter_sleep(us, from_idle, cpumask);
+
+		if (cluster->no_saw_devices)
+			msm_spm_set_rpm_hs(true);
 	}
 	cluster->last_level = idx;
 	spin_unlock(&cluster->sync_lock);
@@ -1135,6 +1138,9 @@ static void cluster_unprepare(struct lpm_cluster *cluster,
 	if (level->notify_rpm) {
 		msm_rpm_exit_sleep();
 		msm_mpm_exit_sleep(from_idle);
+
+		if (cluster->no_saw_devices)
+			msm_spm_set_rpm_hs(false);
 	}
 
 	update_debug_pc_event(CLUSTER_EXIT, cluster->last_level,
