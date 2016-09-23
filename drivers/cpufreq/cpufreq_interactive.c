@@ -48,7 +48,6 @@ struct cpufreq_interactive_policyinfo {
 	spinlock_t load_lock; /* protects load tracking stat */
 	u64 last_evaluated_jiffy;
 	struct cpufreq_policy *policy;
-	struct cpufreq_policy p_nolim; /* policy copy with no limits */
 	struct cpufreq_frequency_table *freq_table;
 	spinlock_t target_freq_lock; /*protects target freq */
 	unsigned int target_freq;
@@ -87,14 +86,13 @@ static struct mutex gov_lock;
 static int set_window_count;
 static int migration_register_count;
 static struct mutex sched_lock;
-static cpumask_t controlled_cpus;
 
 /* Target load.  Lower values result in higher CPU speeds. */
 #define DEFAULT_TARGET_LOAD 90
 static unsigned int default_target_loads[] = {DEFAULT_TARGET_LOAD};
 
 #define DEFAULT_TIMER_RATE (20 * USEC_PER_MSEC)
-#define SCREEN_OFF_TIMER_RATE ((unsigned long)(60 * USEC_PER_MSEC))
+#define SCREEN_OFF_TIMER_RATE ((unsigned long)(50 * USEC_PER_MSEC))
 #define DEFAULT_ABOVE_HISPEED_DELAY DEFAULT_TIMER_RATE
 static unsigned int default_above_hispeed_delay[] = {
 	DEFAULT_ABOVE_HISPEED_DELAY };
@@ -120,7 +118,9 @@ struct cpufreq_interactive_tunables {
 	 * The sample rate of the timer used to increase frequency
 	 */
 	unsigned long timer_rate;
-	unsigned long prev_timer_rate;
+	unsigned long timer_rate_prev;
+#define DEFAULT_TIMER_RATE_SCREENOFF (50 * USEC_PER_MSEC)
+	unsigned long timer_rate_screenoff;
 	/*
 	 * Wait this long before raising speed above hispeed, by default a
 	 * single timer interval.
@@ -166,8 +166,8 @@ struct cpufreq_interactive_tunables {
 	/* Ignore min_sample_time for notification */
 	bool fast_ramp_down;
 
-	/* Use agressive frequency step calculation */
-	bool fastlane;
+	/* Improves frequency selection for more energy */
+	bool powersave_bias;
 };
 
 /* For cases where we have single governor instance for system */
@@ -310,25 +310,6 @@ static unsigned int freq_to_targetload(
 	return ret;
 }
 
-#define DEFAULT_MAX_LOAD 100
-u32 get_freq_max_load(int cpu, unsigned int freq)
-{
-	struct cpufreq_interactive_policyinfo *ppol = per_cpu(polinfo, cpu);
-
-	if (!cpumask_test_cpu(cpu, &controlled_cpus))
-		return DEFAULT_MAX_LOAD;
-
-	if (have_governor_per_policy()) {
-		if (!ppol || !ppol->cached_tunables)
-			return DEFAULT_MAX_LOAD;
-		return freq_to_targetload(ppol->cached_tunables, freq);
-	}
-
-	if (!cached_common_tunables)
-		return DEFAULT_MAX_LOAD;
-	return freq_to_targetload(cached_common_tunables, freq);
-}
-
 /*
  * If increasing frequencies never map to a lower target load then
  * choose_freq() will find the minimum frequency that does not exceed its
@@ -355,7 +336,7 @@ static unsigned int choose_freq(struct cpufreq_interactive_policyinfo *pcpu,
 		 */
 
 		if (cpufreq_frequency_table_target(
-			    &pcpu->p_nolim, pcpu->freq_table, loadadjfreq / tl,
+			    pcpu->policy, pcpu->freq_table, loadadjfreq / tl,
 			    CPUFREQ_RELATION_L, &index))
 			break;
 		freq = pcpu->freq_table[index].frequency;
@@ -370,7 +351,7 @@ static unsigned int choose_freq(struct cpufreq_interactive_policyinfo *pcpu,
 				 * than freqmax.
 				 */
 				if (cpufreq_frequency_table_target(
-					    &pcpu->p_nolim, pcpu->freq_table,
+					    pcpu->policy, pcpu->freq_table,
 					    freqmax - 1, CPUFREQ_RELATION_H,
 					    &index))
 					break;
@@ -397,7 +378,7 @@ static unsigned int choose_freq(struct cpufreq_interactive_policyinfo *pcpu,
 				 * than freqmin.
 				 */
 				if (cpufreq_frequency_table_target(
-					    &pcpu->p_nolim, pcpu->freq_table,
+					    pcpu->policy, pcpu->freq_table,
 					    freqmin + 1, CPUFREQ_RELATION_L,
 					    &index))
 					break;
@@ -467,10 +448,11 @@ static void cpufreq_interactive_timer(unsigned long data)
 	struct sched_load *sl;
 	int new_load_pct = 0;
 	struct cpufreq_govinfo govinfo;
+	bool display_on = is_display_on();
 	bool skip_hispeed_logic, skip_min_sample_time;
 	bool policy_max_fast_restore = false;
 	bool jump_to_max = false;
-	bool display_on = is_display_on();
+	unsigned int this_hispeed_freq;
 
 	if (!down_read_trylock(&ppol->enable_sem))
 		return;
@@ -490,14 +472,14 @@ static void cpufreq_interactive_timer(unsigned long data)
 	ppol->last_evaluated_jiffy = get_jiffies_64();
 
 	if (display_on &&
-		tunables->timer_rate != tunables->prev_timer_rate)
-		tunables->timer_rate = tunables->prev_timer_rate;
+		tunables->timer_rate != tunables->timer_rate_prev)
+		tunables->timer_rate = tunables->timer_rate_prev;
 	else if (!display_on &&
-		tunables->timer_rate != SCREEN_OFF_TIMER_RATE) {
-		tunables->prev_timer_rate = tunables->timer_rate;
+		tunables->timer_rate != tunables->timer_rate_screenoff) {
+		tunables->timer_rate_prev = tunables->timer_rate;
 		tunables->timer_rate
 			= max(tunables->timer_rate,
-				SCREEN_OFF_TIMER_RATE);
+				tunables->timer_rate_screenoff);
 	}
 
 	if (tunables->use_sched_load)
@@ -510,10 +492,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 			cputime_speedadj = (u64)sl->prev_load *
 					   ppol->policy->cpuinfo.max_freq;
 			do_div(cputime_speedadj, tunables->timer_rate);
-			new_load_pct = 0;
-			if (sl->prev_load)
-				new_load_pct = sl->new_task_load * 100 /
-						sl->prev_load;
+			new_load_pct = sl->new_task_load * 100 / sl->prev_load;
 		} else {
 			now = update_load(i);
 			delta_time = (unsigned int)
@@ -541,14 +520,9 @@ static void cpufreq_interactive_timer(unsigned long data)
 	}
 	spin_unlock(&ppol->load_lock);
 
-	/*
-	 * The current cpu freq can be a little inaccurate for calculating cpu
-	 * load since we could have changed frqeuency since the last time we set
-	 * it due to an updated cpufreq policy. This shouldn't happen very often
-	 * though.
-	 */
-	cpu_load = loadadjfreq / ppol->policy->cur;
+	cpu_load = loadadjfreq / ppol->target_freq;
 	tunables->boosted = tunables->boost_val || now < tunables->boostpulse_endtime;
+	this_hispeed_freq = max(tunables->hispeed_freq, ppol->policy->min);
 
 	if (now - ppol->max_freq_hyst_start_time <
 	    tunables->max_freq_hysteresis &&
@@ -560,38 +534,28 @@ static void cpufreq_interactive_timer(unsigned long data)
 	}
 
 	if (policy_max_fast_restore || jump_to_max) {
-		new_freq = ppol->policy->cpuinfo.max_freq;
+		new_freq = ppol->policy->max;
 	} else if (skip_hispeed_logic) {
-		if (!tunables->fastlane)
-			new_freq = choose_freq(ppol, loadadjfreq);
-		else
-			new_freq = ppol->policy->min + cpu_load * (ppol->policy->max - ppol->policy->min) / 100;
+		new_freq = choose_freq(ppol, loadadjfreq);
 	} else if (cpu_load >= tunables->go_hispeed_load || tunables->boosted) {
-		if (ppol->target_freq < tunables->hispeed_freq) {
+		if (ppol->target_freq < this_hispeed_freq) {
 			new_freq = tunables->hispeed_freq;
 		} else {
-			if (!tunables->fastlane)
-				new_freq = choose_freq(ppol, loadadjfreq);
-			else
-				new_freq = ppol->policy->min + cpu_load * (ppol->policy->max - ppol->policy->min) / 100;
+			new_freq = choose_freq(ppol, loadadjfreq);
 
-			if (new_freq < tunables->hispeed_freq)
-				new_freq = tunables->hispeed_freq;
+			if (new_freq < this_hispeed_freq)
+				new_freq = this_hispeed_freq;
 		}
 	} else {
-		if (!tunables->fastlane)
-			new_freq = choose_freq(ppol, loadadjfreq);
-		else
-			new_freq = ppol->policy->min + cpu_load * (ppol->policy->max - ppol->policy->min) / 100;
-
-		if (new_freq > tunables->hispeed_freq &&
-				ppol->policy->cur < tunables->hispeed_freq)
-			new_freq = tunables->hispeed_freq;
+		new_freq = choose_freq(ppol, loadadjfreq);
+		if (new_freq > this_hispeed_freq &&
+				ppol->policy->cur < this_hispeed_freq)
+			new_freq = this_hispeed_freq;
 	}
 
 	if (now - ppol->max_freq_hyst_start_time <
 	    tunables->max_freq_hysteresis)
-		new_freq = max(tunables->hispeed_freq, new_freq);
+		new_freq = max(this_hispeed_freq, new_freq);
 
 	if (!skip_hispeed_logic &&
 	    ppol->target_freq >= tunables->hispeed_freq &&
@@ -607,7 +571,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 
 	ppol->hispeed_validate_time = now;
 
-	if (cpufreq_frequency_table_target(&ppol->p_nolim, ppol->freq_table,
+	if (cpufreq_frequency_table_target(ppol->policy, ppol->freq_table,
 					   new_freq, CPUFREQ_RELATION_L,
 					   &index)) {
 		spin_unlock_irqrestore(&ppol->target_freq_lock, flags);
@@ -642,13 +606,13 @@ static void cpufreq_interactive_timer(unsigned long data)
 	 * min_sample_time.
 	 */
 
-	if ((!tunables->boosted || new_freq > tunables->hispeed_freq)
+	if ((!tunables->boosted || new_freq > this_hispeed_freq)
 	    && !policy_max_fast_restore) {
 		ppol->floor_freq = new_freq;
 		ppol->floor_validate_time = now;
 	}
 
-	if (new_freq >= ppol->policy->max && !policy_max_fast_restore)
+	if (new_freq == ppol->policy->max && !policy_max_fast_restore)
 		ppol->max_freq_hyst_start_time = now;
 
 	if (ppol->target_freq == new_freq &&
@@ -701,6 +665,8 @@ static int cpufreq_interactive_speedchange_task(void *data)
 	cpumask_t tmp_mask;
 	unsigned long flags;
 	struct cpufreq_interactive_policyinfo *ppol;
+	struct cpufreq_interactive_tunables *tunables;
+	bool display_on = is_display_on();
 
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -731,60 +697,29 @@ static int cpufreq_interactive_speedchange_task(void *data)
 				continue;
 			}
 
-			if (ppol->target_freq != ppol->policy->cur)
-				__cpufreq_driver_target(ppol->policy,
-							ppol->target_freq,
-							CPUFREQ_RELATION_H);
-			trace_cpufreq_interactive_setspeed(cpu,
-						     ppol->target_freq,
-						     ppol->policy->cur);
+			if (ppol->target_freq != ppol->policy->cur) {
+				tunables = ppol->policy->governor_data;
+				if (tunables->powersave_bias || !display_on) {
+					__cpufreq_driver_target(ppol->policy,
+								ppol->target_freq,
+								CPUFREQ_RELATION_C);
+					trace_cpufreq_interactive_setspeed(cpu,
+								     ppol->target_freq,
+								     ppol->policy->cur);
+				} else {
+					__cpufreq_driver_target(ppol->policy,
+								ppol->target_freq,
+								CPUFREQ_RELATION_H);
+					trace_cpufreq_interactive_setspeed(cpu,
+								     ppol->target_freq,
+								     ppol->policy->cur);
+				}
+			}
 			up_read(&ppol->enable_sem);
 		}
 	}
 
 	return 0;
-}
-
-static void cpufreq_interactive_boost(struct cpufreq_interactive_tunables *tunables)
-{
-	int i;
-	int anyboost = 0;
-	unsigned long flags[2];
-	struct cpufreq_interactive_policyinfo *ppol;
-
-	tunables->boosted = true;
-
-	spin_lock_irqsave(&speedchange_cpumask_lock, flags[0]);
-
-	for_each_online_cpu(i) {
-		ppol = per_cpu(polinfo, i);
-		if (!ppol || tunables != ppol->policy->governor_data)
-			continue;
-
-		spin_lock_irqsave(&ppol->target_freq_lock, flags[1]);
-		if (ppol->target_freq < tunables->hispeed_freq) {
-			ppol->target_freq = tunables->hispeed_freq;
-			cpumask_set_cpu(i, &speedchange_cpumask);
-			ppol->hispeed_validate_time =
-				ktime_to_us(ktime_get());
-			anyboost = 1;
-		}
-
-		/*
-		 * Set floor freq and (re)start timer for when last
-		 * validated.
-		 */
-
-		ppol->floor_freq = tunables->hispeed_freq;
-		ppol->floor_validate_time = ktime_to_us(ktime_get());
-		spin_unlock_irqrestore(&ppol->target_freq_lock, flags[1]);
-		break;
-	}
-
-	spin_unlock_irqrestore(&speedchange_cpumask_lock, flags[0]);
-
-	if (anyboost)
-		wake_up_process(speedchange_task);
 }
 
 static int load_change_callback(struct notifier_block *nb, unsigned long val,
@@ -813,7 +748,7 @@ static int load_change_callback(struct notifier_block *nb, unsigned long val,
 	spin_unlock_irqrestore(&ppol->target_freq_lock, flags);
 
 	if (!hrtimer_is_queued(&ppol->notif_timer))
-		__hrtimer_start_range_ns(&ppol->notif_timer, ns_to_ktime(1),
+		__hrtimer_start_range_ns(&ppol->notif_timer, ms_to_ktime(1),
 					0, HRTIMER_MODE_REL, 0);
 exit:
 	up_read(&ppol->enable_sem);
@@ -965,9 +900,6 @@ static ssize_t store_target_loads(
 	tunables->target_loads = new_target_loads;
 	tunables->ntarget_loads = ntokens;
 	spin_unlock_irqrestore(&tunables->target_loads_lock, flags);
-
-	sched_update_freq_max_load(&controlled_cpus);
-
 	return count;
 }
 
@@ -1116,7 +1048,7 @@ static ssize_t store_timer_rate(struct cpufreq_interactive_tunables *tunables,
 		pr_warn("timer_rate not aligned to jiffy. Rounded up to %lu\n",
 			val_round);
 	tunables->timer_rate = val_round;
-	tunables->prev_timer_rate = val_round;
+	tunables->timer_rate_prev = val_round;
 
 	if (!tunables->use_sched_load)
 		return count;
@@ -1125,10 +1057,8 @@ static ssize_t store_timer_rate(struct cpufreq_interactive_tunables *tunables,
 		if (!per_cpu(polinfo, cpu))
 			continue;
 		t = per_cpu(polinfo, cpu)->cached_tunables;
-		if (t && t->use_sched_load) {
+		if (t && t->use_sched_load)
 			t->timer_rate = val_round;
-			t->prev_timer_rate = val_round;
-		}
 	}
 	set_window_helper(tunables);
 
@@ -1155,51 +1085,55 @@ static ssize_t store_timer_slack(struct cpufreq_interactive_tunables *tunables,
 	return count;
 }
 
-static ssize_t show_boost(struct cpufreq_interactive_tunables *tunables,
-			  char *buf)
+static ssize_t show_timer_rate_screenoff(struct cpufreq_interactive_tunables
+		*tunables, char *buf)
 {
-	return sprintf(buf, "%d\n", tunables->boost_val);
+	return sprintf(buf, "%lu\n", tunables->timer_rate_screenoff);
 }
 
-static ssize_t store_boost(struct cpufreq_interactive_tunables *tunables,
-			   const char *buf, size_t count)
+static ssize_t store_timer_rate_screenoff(struct cpufreq_interactive_tunables
+		*tunables, const char *buf, size_t count)
 {
 	int ret;
-	unsigned long val;
+	unsigned long val, val_round;
 
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
 
-	tunables->boost_val = val;
+	val_round = jiffies_to_usecs(usecs_to_jiffies(val));
+	if (val != val_round)
+		pr_warn("timer_rate_screenoff not aligned to jiffy. Rounded up to %lu\n",
+			val_round);
 
-	if (tunables->boost_val) {
-		trace_cpufreq_interactive_boost("on");
-		if (!tunables->boosted)
-			cpufreq_interactive_boost(tunables);
-	} else {
-		tunables->boostpulse_endtime = ktime_to_us(ktime_get());
-		trace_cpufreq_interactive_unboost("off");
-	}
+	tunables->timer_rate_screenoff = val_round;
 
 	return count;
 }
 
-static ssize_t store_boostpulse(struct cpufreq_interactive_tunables *tunables,
-				const char *buf, size_t count)
+static ssize_t show_powersave_bias(struct cpufreq_interactive_tunables *tunables,
+		char *buf)
+{
+	return sprintf(buf, "%u\n", tunables->powersave_bias);
+}
+
+static ssize_t store_powersave_bias(struct cpufreq_interactive_tunables *tunables,
+		const char *buf, size_t count)
 {
 	int ret;
-	unsigned long val;
+	unsigned long val, val_round;
 
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
 
-	tunables->boostpulse_endtime = ktime_to_us(ktime_get()) +
-		tunables->boostpulse_duration_val;
-	trace_cpufreq_interactive_boost("pulse");
-	if (!tunables->boosted)
-		cpufreq_interactive_boost(tunables);
+	val_round = jiffies_to_usecs(usecs_to_jiffies(val));
+	if (val != val_round)
+		pr_warn("timer_rate_screenoff not aligned to jiffy. Rounded up to %lu\n",
+			val_round);
+
+	tunables->powersave_bias = val;
+
 	return count;
 }
 
@@ -1254,26 +1188,6 @@ static ssize_t store_io_is_busy(struct cpufreq_interactive_tunables *tunables,
 	}
 	sched_set_io_is_busy(val);
 
-	return count;
-}
-
-static ssize_t show_fastlane(struct cpufreq_interactive_tunables
-		*tunables, char *buf)
-{
-	return sprintf(buf, "%d\n", tunables->fastlane);
-}
-
-static ssize_t store_fastlane(struct cpufreq_interactive_tunables
-		*tunables, const char *buf, size_t count)
-{
-	int ret;
-	unsigned long val;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret < 0)
-		return ret;
-
-	tunables->fastlane = val;
 	return count;
 }
 
@@ -1460,9 +1374,8 @@ show_store_gov_pol_sys(hispeed_freq);
 show_store_gov_pol_sys(go_hispeed_load);
 show_store_gov_pol_sys(min_sample_time);
 show_store_gov_pol_sys(timer_rate);
+show_store_gov_pol_sys(timer_rate_screenoff);
 show_store_gov_pol_sys(timer_slack);
-show_store_gov_pol_sys(boost);
-store_gov_pol_sys(boostpulse);
 show_store_gov_pol_sys(boostpulse_duration);
 show_store_gov_pol_sys(io_is_busy);
 show_store_gov_pol_sys(use_sched_load);
@@ -1471,7 +1384,7 @@ show_store_gov_pol_sys(max_freq_hysteresis);
 show_store_gov_pol_sys(align_windows);
 show_store_gov_pol_sys(ignore_hispeed_on_notif);
 show_store_gov_pol_sys(fast_ramp_down);
-show_store_gov_pol_sys(fastlane);
+show_store_gov_pol_sys(powersave_bias);
 
 #define gov_sys_attr_rw(_name)						\
 static struct global_attr _name##_gov_sys =				\
@@ -1491,8 +1404,8 @@ gov_sys_pol_attr_rw(hispeed_freq);
 gov_sys_pol_attr_rw(go_hispeed_load);
 gov_sys_pol_attr_rw(min_sample_time);
 gov_sys_pol_attr_rw(timer_rate);
+gov_sys_pol_attr_rw(timer_rate_screenoff);
 gov_sys_pol_attr_rw(timer_slack);
-gov_sys_pol_attr_rw(boost);
 gov_sys_pol_attr_rw(boostpulse_duration);
 gov_sys_pol_attr_rw(io_is_busy);
 gov_sys_pol_attr_rw(use_sched_load);
@@ -1501,13 +1414,7 @@ gov_sys_pol_attr_rw(max_freq_hysteresis);
 gov_sys_pol_attr_rw(align_windows);
 gov_sys_pol_attr_rw(ignore_hispeed_on_notif);
 gov_sys_pol_attr_rw(fast_ramp_down);
-gov_sys_pol_attr_rw(fastlane);
-
-static struct global_attr boostpulse_gov_sys =
-	__ATTR(boostpulse, 0200, NULL, store_boostpulse_gov_sys);
-
-static struct freq_attr boostpulse_gov_pol =
-	__ATTR(boostpulse, 0200, NULL, store_boostpulse_gov_pol);
+gov_sys_pol_attr_rw(powersave_bias);
 
 /* One Governor instance for entire system */
 static struct attribute *interactive_attributes_gov_sys[] = {
@@ -1517,9 +1424,8 @@ static struct attribute *interactive_attributes_gov_sys[] = {
 	&go_hispeed_load_gov_sys.attr,
 	&min_sample_time_gov_sys.attr,
 	&timer_rate_gov_sys.attr,
+	&timer_rate_screenoff_gov_sys.attr,
 	&timer_slack_gov_sys.attr,
-	&boost_gov_sys.attr,
-	&boostpulse_gov_sys.attr,
 	&boostpulse_duration_gov_sys.attr,
 	&io_is_busy_gov_sys.attr,
 	&use_sched_load_gov_sys.attr,
@@ -1528,7 +1434,7 @@ static struct attribute *interactive_attributes_gov_sys[] = {
 	&align_windows_gov_sys.attr,
 	&ignore_hispeed_on_notif_gov_sys.attr,
 	&fast_ramp_down_gov_sys.attr,
-	&fastlane_gov_sys.attr,
+	&powersave_bias_gov_sys.attr,
 	NULL,
 };
 
@@ -1545,9 +1451,8 @@ static struct attribute *interactive_attributes_gov_pol[] = {
 	&go_hispeed_load_gov_pol.attr,
 	&min_sample_time_gov_pol.attr,
 	&timer_rate_gov_pol.attr,
+	&timer_rate_screenoff_gov_pol.attr,
 	&timer_slack_gov_pol.attr,
-	&boost_gov_pol.attr,
-	&boostpulse_gov_pol.attr,
 	&boostpulse_duration_gov_pol.attr,
 	&io_is_busy_gov_pol.attr,
 	&use_sched_load_gov_pol.attr,
@@ -1556,7 +1461,7 @@ static struct attribute *interactive_attributes_gov_pol[] = {
 	&align_windows_gov_pol.attr,
 	&ignore_hispeed_on_notif_gov_pol.attr,
 	&fast_ramp_down_gov_pol.attr,
-	&fastlane_gov_pol.attr,
+	&powersave_bias_gov_pol.attr,
 	NULL,
 };
 
@@ -1594,10 +1499,10 @@ static struct cpufreq_interactive_tunables *alloc_tunable(
 	tunables->ntarget_loads = ARRAY_SIZE(default_target_loads);
 	tunables->min_sample_time = DEFAULT_MIN_SAMPLE_TIME;
 	tunables->timer_rate = DEFAULT_TIMER_RATE;
-	tunables->prev_timer_rate = DEFAULT_TIMER_RATE;
+	tunables->timer_rate_prev = DEFAULT_TIMER_RATE;
+	tunables->timer_rate_screenoff = DEFAULT_TIMER_RATE_SCREENOFF;
 	tunables->boostpulse_duration_val = DEFAULT_MIN_SAMPLE_TIME;
 	tunables->timer_slack_val = DEFAULT_TIMER_SLACK;
-	tunables->fastlane = false;
 
 	spin_lock_init(&tunables->target_loads_lock);
 	spin_lock_init(&tunables->above_hispeed_delay_lock);
@@ -1677,6 +1582,8 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 	struct cpufreq_interactive_policyinfo *ppol;
 	struct cpufreq_frequency_table *freq_table;
 	struct cpufreq_interactive_tunables *tunables;
+	unsigned long flags;
+	unsigned int anyboost;
 
 	if (have_governor_per_policy())
 		tunables = policy->governor_data;
@@ -1695,9 +1602,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			WARN_ON(tunables);
 		} else if (tunables) {
 			tunables->usage_count++;
-			cpumask_or(&controlled_cpus, &controlled_cpus,
-				   policy->related_cpus);
-			sched_update_freq_max_load(policy->related_cpus);
 			policy->governor_data = tunables;
 			return 0;
 		}
@@ -1712,8 +1616,8 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		tunables->usage_count = 1;
 		policy->governor_data = tunables;
 		if (!have_governor_per_policy()) {
-			common_tunables = tunables;
 			WARN_ON(cpufreq_get_global_kobject());
+			common_tunables = tunables;
 		}
 
 		rc = sysfs_create_group(get_governor_parent_kobj(policy),
@@ -1735,10 +1639,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		if (tunables->use_sched_load)
 			cpufreq_interactive_enable_sched_input(tunables);
 
-		cpumask_or(&controlled_cpus, &controlled_cpus,
-			   policy->related_cpus);
-		sched_update_freq_max_load(policy->related_cpus);
-
 		if (have_governor_per_policy())
 			ppol->cached_tunables = tunables;
 		else
@@ -1747,9 +1647,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		break;
 
 	case CPUFREQ_GOV_POLICY_EXIT:
-		cpumask_andnot(&controlled_cpus, &controlled_cpus,
-			       policy->related_cpus);
-		sched_update_freq_max_load(cpu_possible_mask);
 		if (!--tunables->usage_count) {
 			if (policy->governor->initialized == 1)
 				cpufreq_unregister_notifier(&cpufreq_notifier_block,
@@ -1757,7 +1654,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 
 			sysfs_remove_group(get_governor_parent_kobj(policy),
 					get_sysfs_attr());
-
 			if (!have_governor_per_policy())
 				cpufreq_put_global_kobject();
 			common_tunables = NULL;
@@ -1774,16 +1670,11 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		mutex_lock(&gov_lock);
 
 		freq_table = cpufreq_frequency_get_table(policy->cpu);
-		if (!tunables->hispeed_freq)
-			tunables->hispeed_freq = policy->max;
 
 		ppol = per_cpu(polinfo, policy->cpu);
 		ppol->policy = policy;
 		ppol->target_freq = policy->cur;
 		ppol->freq_table = freq_table;
-		ppol->p_nolim = *policy;
-		ppol->p_nolim.min = policy->cpuinfo.min_freq;
-		ppol->p_nolim.max = policy->cpuinfo.max_freq;
 		ppol->floor_freq = ppol->target_freq;
 		ppol->floor_validate_time = ktime_to_us(ktime_get());
 		ppol->hispeed_validate_time = ppol->floor_validate_time;
@@ -1820,19 +1711,37 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		break;
 
 	case CPUFREQ_GOV_LIMITS:
-		ppol = per_cpu(polinfo, policy->cpu);
-
 		__cpufreq_driver_target(policy,
-				ppol->target_freq, CPUFREQ_RELATION_L);
+				policy->cur, CPUFREQ_RELATION_L);
+
+		ppol = per_cpu(polinfo, policy->cpu);
 
 		down_read(&ppol->enable_sem);
 		if (ppol->governor_enabled) {
+			spin_lock_irqsave(&ppol->target_freq_lock, flags);
+			if (policy->max < ppol->target_freq) {
+				ppol->target_freq = policy->max;
+			} else if (policy->min > ppol->target_freq) {
+				ppol->target_freq = policy->min;
+				anyboost = 1;
+			}
+			spin_unlock_irqrestore(&ppol->target_freq_lock, flags);
+
 			if (policy->min < ppol->min_freq)
 				cpufreq_interactive_timer_resched(policy->cpu,
 								  true);
 			ppol->min_freq = policy->min;
 		}
+
 		up_read(&ppol->enable_sem);
+
+		if (anyboost) {
+			u64 now = ktime_to_us(ktime_get());
+
+			ppol->hispeed_validate_time = now;
+			ppol->floor_freq = policy->min;
+			ppol->floor_validate_time = now;
+		}
 
 		break;
 	}
