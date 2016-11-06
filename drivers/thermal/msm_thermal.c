@@ -86,6 +86,9 @@
 #define HOTPLUG_SENSOR_ID 18
 #define HOTPLUG_HYSTERESIS 2
 unsigned int temp_threshold = DEF_TEMP_THRESHOLD;
+unsigned int poll_ms;
+
+module_param(poll_ms, int, 0644);
 module_param(temp_threshold, int, 0644);
 
 static struct msm_thermal_data msm_thermal_info;
@@ -3010,7 +3013,7 @@ static void check_temp(struct work_struct *work)
 reschedule:
 	//if (polling_enabled)
 		schedule_delayed_work(&check_temp_work,
-				msecs_to_jiffies(msm_thermal_info.poll_ms));
+				msecs_to_jiffies(poll_ms));
 }
 
 static int __ref msm_thermal_cpu_callback(struct notifier_block *nfb,
@@ -5853,7 +5856,7 @@ static int msm_thermal_dev_probe(struct platform_device *pdev)
 		goto fail;
 
 	key = "qcom,poll-ms";
-	ret = of_property_read_u32(node, key, &data.poll_ms);
+	ret = of_property_read_u32(node, key, &poll_ms);
 	if (ret)
 		goto fail;
 
