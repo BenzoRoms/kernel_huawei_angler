@@ -649,7 +649,7 @@ int f2fs_truncate(struct inode *inode)
 	if (err)
 		return err;
 
-	inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+	inode->i_mtime = inode->i_ctime = current_time(inode);
 	f2fs_mark_inode_dirty_sync(inode, false);
 	return 0;
 }
@@ -726,7 +726,7 @@ int f2fs_setattr(struct dentry *dentry, struct iattr *attr)
 				if (err)
 					return err;
 			}
-			inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+			inode->i_mtime = inode->i_ctime = current_time(inode);
 		}
 
 		size_changed = true;
@@ -1432,7 +1432,7 @@ static long f2fs_fallocate(struct file *file, int mode,
 	}
 
 	if (!ret) {
-		inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+		inode->i_mtime = inode->i_ctime = current_time(inode);
 		f2fs_mark_inode_dirty_sync(inode, false);
 		if (mode & FALLOC_FL_KEEP_SIZE)
 			file_set_keep_isize(inode);
@@ -1526,7 +1526,7 @@ static int f2fs_ioc_setflags(struct file *filp, unsigned long arg)
 	fi->i_flags = flags;
 	inode_unlock(inode);
 
-	inode->i_ctime = CURRENT_TIME;
+	inode->i_ctime = current_time(inode);
 	f2fs_set_inode_flags(inode);
 out:
 	mnt_drop_write_file(filp);
@@ -1568,14 +1568,12 @@ static int f2fs_ioc_start_atomic_write(struct file *filp)
 		goto out;
 
 	f2fs_msg(F2FS_I_SB(inode)->sb, KERN_WARNING,
-		"Unexpected flush for atomic writes: ino=%lu, npages=%u",
+		"Unexpected flush for atomic writes: ino=%lu, npages=%lld",
 					inode->i_ino, get_dirty_pages(inode));
 	ret = filemap_write_and_wait_range(inode->i_mapping, 0, LLONG_MAX);
 	if (ret)
 		clear_inode_flag(inode, FI_ATOMIC_FILE);
 out:
-	stat_inc_atomic_write(inode);
-	stat_update_max_atomic_write(inode);
 	inode_unlock(inode);
 	mnt_drop_write_file(filp);
 	return ret;
@@ -1599,18 +1597,15 @@ static int f2fs_ioc_commit_atomic_write(struct file *filp)
 		goto err_out;
 
 	if (f2fs_is_atomic_file(inode)) {
+		clear_inode_flag(inode, FI_ATOMIC_FILE);
 		ret = commit_inmem_pages(inode);
-		if (ret)
+		if (ret) {
+			set_inode_flag(inode, FI_ATOMIC_FILE);
 			goto err_out;
-
-		ret = f2fs_do_sync_file(filp, 0, LLONG_MAX, 0, true);
-		if (!ret) {
-			clear_inode_flag(inode, FI_ATOMIC_FILE);
-			stat_dec_atomic_write(inode);
 		}
-	} else {
-		ret = f2fs_do_sync_file(filp, 0, LLONG_MAX, 0, true);
 	}
+
+	ret = f2fs_do_sync_file(filp, 0, LLONG_MAX, 0, true);
 err_out:
 	inode_unlock(inode);
 	mnt_drop_write_file(filp);
@@ -1689,10 +1684,8 @@ static int f2fs_ioc_abort_volatile_write(struct file *filp)
 
 	inode_lock(inode);
 
-	if (f2fs_is_atomic_file(inode)) {
+	if (f2fs_is_atomic_file(inode))
 		drop_inmem_pages(inode);
-		stat_dec_atomic_write(inode);
-	}
 	if (f2fs_is_volatile_file(inode)) {
 		clear_inode_flag(inode, FI_VOLATILE_FILE);
 		ret = f2fs_do_sync_file(filp, 0, LLONG_MAX, 0, true);
@@ -1803,21 +1796,14 @@ static int f2fs_ioc_set_encryption_policy(struct file *filp, unsigned long arg)
 {
 	struct fscrypt_policy policy;
 	struct inode *inode = file_inode(filp);
-	int ret;
 
 	if (copy_from_user(&policy, (struct fscrypt_policy __user *)arg,
 							sizeof(policy)))
 		return -EFAULT;
 
-	ret = mnt_want_write_file(filp);
-	if (ret)
-		return ret;
-
 	f2fs_update_time(F2FS_I_SB(inode), REQ_TIME);
-	ret = fscrypt_process_policy(inode, &policy);
 
-	mnt_drop_write_file(filp);
-	return ret;
+	return fscrypt_process_policy(filp, &policy);
 }
 
 static int f2fs_ioc_get_encryption_policy(struct file *filp, unsigned long arg)
@@ -2314,8 +2300,7 @@ static ssize_t f2fs_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	ret = generic_write_checks(file, &pos, &count, S_ISBLK(inode->i_mode));
 	if (!ret) {
 		int err = f2fs_preallocate_blocks(inode, pos, count,
-					iocb->ki_filp->f_flags & O_DIRECT);
-
+				iocb->ki_filp->f_flags & O_DIRECT);
 		if (err) {
 			inode_unlock(inode);
 			return err;

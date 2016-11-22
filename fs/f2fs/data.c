@@ -112,6 +112,46 @@ static void f2fs_write_end_io(struct bio *bio, int err)
 }
 
 /*
+ * Return true, if pre_bio's bdev is same as its target device.
+ */
+struct block_device *f2fs_target_device(struct f2fs_sb_info *sbi,
+				block_t blk_addr, struct bio *bio)
+{
+	struct block_device *bdev = sbi->sb->s_bdev;
+	int i;
+
+	for (i = 0; i < sbi->s_ndevs; i++) {
+		if (FDEV(i).start_blk <= blk_addr &&
+					FDEV(i).end_blk >= blk_addr) {
+			blk_addr -= FDEV(i).start_blk;
+			bdev = FDEV(i).bdev;
+			break;
+		}
+	}
+	if (bio) {
+		bio->bi_bdev = bdev;
+		bio->bi_sector = SECTOR_FROM_BLOCK(blk_addr);
+	}
+	return bdev;
+}
+
+int f2fs_target_device_index(struct f2fs_sb_info *sbi, block_t blkaddr)
+{
+	int i;
+
+	for (i = 0; i < sbi->s_ndevs; i++)
+		if (FDEV(i).start_blk <= blkaddr && FDEV(i).end_blk >= blkaddr)
+			return i;
+	return 0;
+}
+
+static bool __same_bdev(struct f2fs_sb_info *sbi,
+				block_t blk_addr, struct bio *bio)
+{
+	return f2fs_target_device(sbi, blk_addr, NULL) == bio->bi_bdev;
+}
+
+/*
  * Low-level block read/write IO operations.
  */
 static struct bio *__bio_alloc(struct f2fs_sb_info *sbi, block_t blk_addr,
@@ -121,8 +161,7 @@ static struct bio *__bio_alloc(struct f2fs_sb_info *sbi, block_t blk_addr,
 
 	bio = f2fs_bio_alloc(npages);
 
-	bio->bi_bdev = sbi->sb->s_bdev;
-	bio->bi_sector = SECTOR_FROM_BLOCK(blk_addr);
+	f2fs_target_device(sbi, blk_addr, bio);
 	bio->bi_end_io = is_read ? f2fs_read_end_io : f2fs_write_end_io;
 	bio->bi_private = is_read ? NULL : sbi;
 
@@ -133,7 +172,7 @@ static inline void __submit_bio(struct f2fs_sb_info *sbi, int rw,
 			struct bio *bio, enum page_type type)
 {
 	if (!is_read_io(rw)) {
-		if (f2fs_sb_mounted_hmsmr(sbi->sb) &&
+		if (f2fs_sb_mounted_blkzoned(sbi->sb) &&
 			current->plug && (type == DATA || type == NODE))
 			blk_finish_plug(current->plug);
 	}
@@ -296,7 +335,8 @@ void f2fs_submit_page_mbio(struct f2fs_io_info *fio)
 	down_write(&io->io_rwsem);
 
 	if (io->bio && (io->last_block_in_bio != fio->new_blkaddr - 1 ||
-						io->fio.rw != fio->rw))
+			(io->fio.rw != fio->rw) ||
+			!__same_bdev(sbi, fio->new_blkaddr, io->bio)))
 		__submit_merged_bio(io);
 alloc_new:
 	if (io->bio == NULL) {
@@ -641,10 +681,12 @@ alloc:
 static inline bool __force_buffered_io(struct inode *inode, int rw)
 {
 	return ((f2fs_encrypted_inode(inode) && S_ISREG(inode->i_mode)) ||
-			(rw == WRITE && test_opt(F2FS_I_SB(inode), LFS)));
+			(rw == WRITE && test_opt(F2FS_I_SB(inode), LFS)) ||
+			F2FS_I_SB(inode)->s_ndevs);
 }
 
-int f2fs_preallocate_blocks(struct inode *inode, loff_t pos, size_t count, bool dio)
+int f2fs_preallocate_blocks(struct inode *inode, loff_t pos,
+					size_t count, bool dio)
 {
 	struct f2fs_map_blocks map;
 	int err = 0;
@@ -989,7 +1031,6 @@ static struct bio *f2fs_grab_bio(struct inode *inode, block_t blkaddr,
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct fscrypt_ctx *ctx = NULL;
-	struct block_device *bdev = sbi->sb->s_bdev;
 	struct bio *bio;
 
 	if (f2fs_encrypted_inode(inode) && S_ISREG(inode->i_mode)) {
@@ -1007,8 +1048,7 @@ static struct bio *f2fs_grab_bio(struct inode *inode, block_t blkaddr,
 			fscrypt_release_ctx(ctx);
 		return ERR_PTR(-ENOMEM);
 	}
-	bio->bi_bdev = bdev;
-	bio->bi_sector = SECTOR_FROM_BLOCK(blkaddr);
+	f2fs_target_device(sbi, blkaddr, bio);
 	bio->bi_end_io = f2fs_read_end_io;
 	bio->bi_private = ctx;
 
@@ -1045,7 +1085,7 @@ static int f2fs_mpage_readpages(struct address_space *mapping,
 
 		prefetchw(&page->flags);
 		if (pages) {
-			page = list_last_entry(pages, struct page, lru);
+			page = list_entry(pages->prev, struct page, lru);
 			list_del(&page->lru);
 			if (add_to_page_cache_lru(page, mapping,
 						  page->index, GFP_KERNEL))
@@ -1102,7 +1142,8 @@ got_it:
 		 * This page will go to BIO.  Do we need to send this
 		 * BIO off first?
 		 */
-		if (bio && (last_block_in_bio != block_nr - 1)) {
+		if (bio && (last_block_in_bio != block_nr - 1 ||
+			!__same_bdev(F2FS_I_SB(inode), block_nr, bio))) {
 submit_and_realloc:
 			__submit_bio(F2FS_I_SB(inode), READ, bio, DATA);
 			bio = NULL;
@@ -1161,7 +1202,7 @@ static int f2fs_read_data_pages(struct file *file,
 			struct list_head *pages, unsigned nr_pages)
 {
 	struct inode *inode = file->f_mapping->host;
-	struct page *page = list_last_entry(pages, struct page, lru);
+	struct page *page = list_entry(pages->prev, struct page, lru);
 
 	trace_f2fs_readpages(inode, page, nr_pages);
 
@@ -1811,14 +1852,12 @@ static ssize_t f2fs_direct_IO(int rw, struct kiocb *iocb,
 	return err;
 }
 
-void f2fs_invalidate_page(struct page *page, unsigned int offset,
-							unsigned int length)
+void f2fs_invalidate_page(struct page *page, unsigned long offset)
 {
 	struct inode *inode = page->mapping->host;
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 
-	if (inode->i_ino >= F2FS_ROOT_INO(sbi) &&
-		(offset % PAGE_SIZE || length != PAGE_SIZE))
+	if (inode->i_ino >= F2FS_ROOT_INO(sbi) && (offset % PAGE_SIZE))
 		return;
 
 	if (PageDirty(page)) {
@@ -1892,7 +1931,7 @@ static int f2fs_set_data_page_dirty(struct page *page)
 	if (!PageUptodate(page))
 		SetPageUptodate(page);
 
-	if (f2fs_is_atomic_file(inode) && !f2fs_is_commit_atomic_write(inode)) {
+	if (f2fs_is_atomic_file(inode)) {
 		if (!IS_ATOMIC_WRITTEN_PAGE(page)) {
 			register_inmem_page(inode, page);
 			return 1;
