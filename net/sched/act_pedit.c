@@ -135,6 +135,17 @@ static bool offset_valid(struct sk_buff *skb, int offset)
 	return true;
 }
 
+static bool offset_valid(struct sk_buff *skb, int offset)
+{
+	if (offset > 0 && offset > skb->len)
+		return false;
+
+	if  (offset < 0 && -offset > skb_headroom(skb))
+		return false;
+
+	return true;
+}
+
 static int tcf_pedit(struct sk_buff *skb, const struct tc_action *a,
 		     struct tcf_result *res)
 {
