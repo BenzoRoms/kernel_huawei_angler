@@ -1,4 +1,6 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016, jollaman999 <admin@jollaman999.com>. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -47,8 +49,8 @@
 #include <linux/suspend.h>
 #include <soc/qcom/msm-core.h>
 #include <linux/cpumask.h>
+#include <linux/fb.h>
 #include <linux/qpnp/power-on.h>
-#include <linux/suspend.h>
 
 #define CREATE_TRACE_POINTS
 #define TRACE_MSM_THERMAL
@@ -81,15 +83,58 @@
 		_val |= 2;				\
 } while (0)
 
-//custom thermal
-#define DEF_TEMP_THRESHOLD 46
-#define HOTPLUG_SENSOR_ID 18
-#define HOTPLUG_HYSTERESIS 2
-unsigned int temp_threshold = DEF_TEMP_THRESHOLD;
-unsigned int poll_ms;
+struct notifier_block msm_thermal_fb_notif;
 
+static int big_core_start;
+
+/*
+ * Tunable options
+ *
+ * poll_ms - msm_thermal will check device's temperature every this milli seconds.
+ * temp_threshold - Limit the frequency when temp is reached to 'temp_threshold'.
+ * temp_big_threshold - Turn off the big cores when temp is reached to 'temp_big_threshold'.
+ * temp_step_little - If 'temp_step_little = 4' and 'temp_threshold = 60', frequency will decrease like below.
+		temp = 60 --> Little's max frequency will decrease one time.
+		temp = 62 --> Little's max frequency will decrease one time.
+		temp = 63 --> Little's max frequency will decrease one time.
+		temp = 64 --> Little's max frequency will decrease two times.
+		temp = 65 --> Little's max frequency will decrease two times.
+		temp = 68 --> Little's max frequency will decrease three times.
+ * temp_step_big - If 'temp_step_big = 2' and 'temp_threshold = 60', frequency will decrease like below.
+		temp = 60 --> Big's max frequency will decrease one time.
+		temp = 61 --> Big's max frequency will decrease one time.
+		temp = 62 --> Big's max frequency will decrease two time.
+		temp = 63 --> Big's max frequency will decrease two times.
+		temp = 64 --> Big's max frequency will decrease three times.
+ * freq_step_little - Frequency decrease step for little.
+ * freq_step_big - Frequency decrease step for big.
+ * temp_count_max_little - If this value is 3, little's max frequency will decrease 1 to 3 times.
+ * temp_count_max_big - If this value is 5, big's max frequency will decrease 1 to 5 times.
+ */
+unsigned int poll_ms;
+unsigned int temp_threshold;
+unsigned int temp_big_threshold;
+unsigned int temp_step_little = 4;
+unsigned int temp_step_big = 2;
+unsigned int freq_step_little = 1;
+unsigned int freq_step_big = 2;
+unsigned int temp_count_max_little = 3;
+unsigned int temp_count_max_big = 5;
 module_param(poll_ms, int, 0644);
 module_param(temp_threshold, int, 0644);
+module_param(temp_big_threshold, int, 0644);
+module_param(temp_step_little, int, 0644);
+module_param(temp_step_big, int, 0644);
+module_param(freq_step_little, int, 0644);
+module_param(freq_step_big, int, 0644);
+module_param(temp_count_max_little, int, 0644);
+module_param(temp_count_max_big, int, 0644);
+
+// Debug
+unsigned int debug_core_control = 0;
+unsigned int debug_freq_control = 0;
+module_param(debug_core_control, int, 0644);
+module_param(debug_freq_control, int, 0644);
 
 static struct msm_thermal_data msm_thermal_info;
 static struct delayed_work check_temp_work;
@@ -133,7 +178,6 @@ static bool ocr_nodes_called;
 static bool ocr_probed;
 static bool ocr_reg_init_defer;
 static bool hotplug_enabled;
-static bool interrupt_mode_enable;
 static bool msm_thermal_probed;
 static bool gfx_crit_phase_ctrl_enabled;
 static bool gfx_warm_phase_ctrl_enabled;
@@ -205,7 +249,6 @@ struct cpu_info {
 	bool max_freq;
 	uint32_t user_max_freq;
 	uint32_t shutdown_max_freq;
-	uint32_t suspend_max_freq;
 	uint32_t user_min_freq;
 	uint32_t limited_max_freq;
 	uint32_t limited_min_freq;
@@ -451,71 +494,40 @@ uint32_t get_core_min_freq(uint32_t cpu)
 	return min_freq;
 }
 
-static void msm_thermal_update_freq(bool is_shutdown, bool mitigate)
+static int msm_thermal_reboot_callback(
+		struct notifier_block *nfb, unsigned long val, void *data)
 {
-	uint32_t cpu;
-	bool update = false;
+	if (val == SYS_RESTART || val == SYS_POWER_OFF || val == SYS_HALT) {
+		uint32_t cpu;
 
-	for_each_possible_cpu(cpu) {
-		if (msm_thermal_info.freq_mitig_control_mask
-			& BIT(cpu)) {
-			uint32_t *freq = (is_shutdown)
-				? &cpus[cpu].shutdown_max_freq
-				: &cpus[cpu].suspend_max_freq;
-			uint32_t mitigation_freq = (mitigate) ?
-				get_core_min_freq(cpu) : UINT_MAX;
-
-			if (*freq == mitigation_freq)
-				continue;
-			*freq = mitigation_freq;
-			update = true;
-			pr_debug("%s mitigate CPU%u to %u\n",
-				(is_shutdown) ? "Shutdown" : "Suspend", cpu,
-				mitigation_freq);
+		for_each_possible_cpu(cpu) {
+			if (msm_thermal_info.freq_mitig_control_mask
+				& BIT(cpu)) {
+				cpus[cpu].shutdown_max_freq =
+					get_core_min_freq(cpu);
+				if (cpus[cpu].shutdown_max_freq == UINT_MAX)
+					continue;
+				if (freq_mitigation_task) {
+					pr_debug("Mitigate CPU%u to %u\n", cpu,
+						cpus[cpu].shutdown_max_freq);
+					complete(&freq_mitigation_complete);
+				} else {
+					pr_err(
+					"Freq mit task is not initialized\n");
+				}
+			}
 		}
 	}
 
-	if (!update)
-		goto notify_exit;
-
-	if (freq_mitigation_task)
-		complete(&freq_mitigation_complete);
-	else
-		pr_err("Freq mitigation task is not initialized\n");
-notify_exit:
-	return;
-}
-
-static int msm_thermal_power_down_callback(
-		struct notifier_block *nfb, unsigned long action, void *data)
-{
-
-	switch (action) {
-	case SYS_RESTART:
-	case SYS_POWER_OFF:
-	case SYS_HALT:
-		msm_thermal_update_freq(true, true);
-		break;
-
-	default:
-		return NOTIFY_DONE;
-	}
-
-	return NOTIFY_OK;
+	return NOTIFY_DONE;
 }
 
 static int msm_thermal_suspend_callback(
 	struct notifier_block *nfb, unsigned long action, void *data)
 {
 	switch (action) {
-	case PM_HIBERNATION_PREPARE:
-	case PM_SUSPEND_PREPARE:
-		msm_thermal_update_freq(false, true);
-		break;
-
 	case PM_POST_HIBERNATION:
 	case PM_POST_SUSPEND:
-		msm_thermal_update_freq(false, false);
 		if (hotplug_task)
 			complete(&hotplug_notify_complete);
 		else
@@ -530,7 +542,7 @@ static int msm_thermal_suspend_callback(
 }
 
 static struct notifier_block msm_thermal_reboot_notifier = {
-	.notifier_call = msm_thermal_power_down_callback,
+	.notifier_call = msm_thermal_reboot_callback,
 };
 
 static struct device_manager_data *find_device_by_name(const char *device_name)
@@ -1295,47 +1307,87 @@ static void update_cluster_freq(void)
 	}
 }
 
+static int cur_index_little = 0, cur_index_big = 0;
+static bool restored = true;
+
 static void do_cluster_freq_ctrl(long temp)
 {
 	uint32_t _cluster = 0;
 	int _cpu = -1, freq_idx = 0;
-	bool mitigate = false;
+	int temp_diff;
+	int index, step;
+	int index_little, index_big;
+	bool skip_little = false, skip_big = false;
 	struct cluster_info *cluster_ptr = NULL;
 
-	if (temp >= msm_thermal_info.limit_temp_degC)
-		mitigate = true;
-	else if (temp < msm_thermal_info.limit_temp_degC -
-		 msm_thermal_info.temp_hysteresis_degC)
-		mitigate = false;
-	else
-		return;
+	if (temp < temp_threshold) {
+		if (restored)
+			return;
+		else {
+			index_little = index_big = 0;
+			cur_index_big = cur_index_little = 0;
+			restored = true;
+			goto freq_control;
+		}
+	}
 
+	temp_diff = temp - temp_threshold;
+	if (temp_diff > 0) {
+		index_little = temp_diff / temp_step_little + 1;
+		index_big = temp_diff / temp_step_big + 1;
+		if (index_little > temp_count_max_little)
+			index_little = temp_count_max_little;
+		if (index_big > temp_count_max_big)
+			index_big = temp_count_max_big;
+	} else
+		index_big = index_little = 1;
+
+	if (index_little == cur_index_little)
+		skip_little = true;
+	else
+		cur_index_little = index_little;
+
+	if (index_big == cur_index_big)
+		skip_big = true;
+	else
+		cur_index_big = index_big;
+
+	restored = false;
+
+freq_control:
 	get_online_cpus();
 	for (; _cluster < core_ptr->entity_count; _cluster++) {
 		cluster_ptr = &core_ptr->child_entity_ptr[_cluster];
 		if (!cluster_ptr->freq_table)
 			continue;
 
-		if (mitigate)
-			freq_idx = max_t(int, cluster_ptr->freq_idx_low,
-				(cluster_ptr->freq_idx
-				- msm_thermal_info.bootup_freq_step));
-		else
-			freq_idx = min_t(int, cluster_ptr->freq_idx_high,
-				(cluster_ptr->freq_idx
-				+ msm_thermal_info.bootup_freq_step));
+		if (first_cpu(cluster_ptr->cluster_cores) >= big_core_start) {
+			if (skip_big)
+				continue;
+			index = index_big;
+			step = freq_step_big;
+		} else {
+			if (skip_little)
+				continue;
+			index = index_little;
+			step = freq_step_little;
+		}
+
+		freq_idx = max_t(int, cluster_ptr->freq_idx_low,
+			cluster_ptr->freq_idx_high - step * index);
 		if (freq_idx == cluster_ptr->freq_idx)
 			continue;
-
 		cluster_ptr->freq_idx = freq_idx;
+
 		for_each_cpu_mask(_cpu, cluster_ptr->cluster_cores) {
 			if (!(msm_thermal_info.bootup_freq_control_mask
 				& BIT(_cpu)))
 				continue;
-			pr_info("Limiting CPU%d max frequency to %u. Temp:%ld\n"
-				, _cpu
-				, cluster_ptr->freq_table[freq_idx].frequency
-				, temp);
+			if (debug_freq_control)
+				pr_info("Limiting CPU%d max frequency to %u. Temp:%ld\n"
+					, _cpu
+					, cluster_ptr->freq_table[freq_idx].frequency
+					, temp);
 			cpus[_cpu].limited_max_freq =
 				cluster_ptr->freq_table[freq_idx].frequency;
 		}
@@ -2414,16 +2466,15 @@ static void __ref do_core_control(long temp)
 
 	mutex_lock(&core_control_mutex);
 	if (msm_thermal_info.core_control_mask &&
-		temp >= temp_threshold) {
-		for (i = num_possible_cpus(); i > 0; i--) {
-			if (i < 4 && !polling_enabled)
-				continue;
+		temp >= temp_big_threshold) {
+		for (i = big_core_start; i < num_possible_cpus(); i++) { // Only on/off big cores
 			if (!(msm_thermal_info.core_control_mask & BIT(i)))
 				continue;
 			if (cpus_offlined & BIT(i) && !cpu_online(i))
 				continue;
-			pr_info("Set Offline: CPU%d Temp: %ld\n",
-					i, temp);
+			if (debug_core_control)
+				pr_info("Set Offline: CPU%d Temp: %ld\n",
+						i, temp);
 			if (cpu_online(i)) {
 				trace_thermal_pre_core_offline(i);
 				ret = cpu_down(i);
@@ -2437,13 +2488,14 @@ static void __ref do_core_control(long temp)
 			break;
 		}
 	} else if (msm_thermal_info.core_control_mask && cpus_offlined &&
-		temp <= (temp_threshold - HOTPLUG_HYSTERESIS)) {
-		for (i = 0; i < num_possible_cpus(); i++) {
+		temp <= (temp_big_threshold - msm_thermal_info.core_temp_hysteresis_degC)) {
+		for (i = big_core_start; i < num_possible_cpus(); i++) { // Only on/off big cores
 			if (!(cpus_offlined & BIT(i)))
 				continue;
 			cpus_offlined &= ~BIT(i);
-			pr_info("Allow Online CPU%d Temp: %ld\n",
-					i, temp);
+			if (debug_core_control)
+				pr_info("Allow Online CPU%d Temp: %ld\n",
+						i, temp);
 			/*
 			 * If this core is already online, then bring up the
 			 * next offlined core.
@@ -2925,20 +2977,20 @@ static void do_freq_control(long temp)
 	if (!freq_table_get)
 		return;
 
-	if (temp >= msm_thermal_info.limit_temp_degC) {
+	if (temp >= temp_threshold) {
 		if (limit_idx == limit_idx_low)
 			return;
 
-		limit_idx -= msm_thermal_info.bootup_freq_step;
+		limit_idx -= freq_step_little;
 		if (limit_idx < limit_idx_low)
 			limit_idx = limit_idx_low;
 		max_freq = table[limit_idx].frequency;
-	} else if (temp < msm_thermal_info.limit_temp_degC -
+	} else if (temp < temp_threshold -
 		 msm_thermal_info.temp_hysteresis_degC) {
 		if (limit_idx == limit_idx_high)
 			return;
 
-		limit_idx += msm_thermal_info.bootup_freq_step;
+		limit_idx += freq_step_little;
 		if (limit_idx >= limit_idx_high) {
 			limit_idx = limit_idx_high;
 			max_freq = UINT_MAX;
@@ -2954,8 +3006,9 @@ static void do_freq_control(long temp)
 	for_each_possible_cpu(cpu) {
 		if (!(msm_thermal_info.bootup_freq_control_mask & BIT(cpu)))
 			continue;
-		pr_info("Limiting CPU%d max frequency to %u. Temp:%ld\n",
-			cpu, max_freq, temp);
+		if (debug_freq_control)
+			pr_info("Limiting CPU%d max frequency to %u. Temp:%ld\n",
+				cpu, max_freq, temp);
 		cpus[cpu].limited_max_freq = max_freq;
 		if (!SYNC_CORE(cpu))
 			update_cpu_freq(cpu);
@@ -2969,22 +3022,7 @@ static void check_temp(struct work_struct *work)
 	long temp = 0;
 	int ret = 0;
 
-	if (!msm_thermal_probed)
-		return;
-
 	do_therm_reset();
-
-	if (!polling_enabled) {
-		ret = therm_get_temp(HOTPLUG_SENSOR_ID, THERM_ZONE_ID, &temp);
-		if (ret) {
-			pr_err("Unable to read sensor:%d. err:%d\n",
-				HOTPLUG_SENSOR_ID, ret);
-			goto reschedule;
-		}
-		do_core_control(temp);
-
-		goto reschedule;
-	}
 
 	ret = therm_get_temp(msm_thermal_info.sensor_id, THERM_TSENS_ID, &temp);
 	if (ret) {
@@ -3011,7 +3049,7 @@ static void check_temp(struct work_struct *work)
 	do_freq_control(temp);
 
 reschedule:
-	//if (polling_enabled)
+	if (polling_enabled)
 		schedule_delayed_work(&check_temp_work,
 				msecs_to_jiffies(poll_ms));
 }
@@ -3021,8 +3059,7 @@ static int __ref msm_thermal_cpu_callback(struct notifier_block *nfb,
 {
 	uint32_t cpu = (uintptr_t)hcpu;
 
-	switch (action & ~CPU_TASKS_FROZEN) {
-	case CPU_UP_PREPARE:
+	if (action == CPU_UP_PREPARE || action == CPU_UP_PREPARE_FROZEN) {
 		if (!cpumask_test_and_set_cpu(cpu, cpus_previously_online))
 			pr_debug("Total prev cores online tracked %u\n",
 				cpumask_weight(cpus_previously_online));
@@ -3033,32 +3070,11 @@ static int __ref msm_thermal_cpu_callback(struct notifier_block *nfb,
 				cpu);
 			return NOTIFY_BAD;
 		}
-		break;
-	case CPU_DOWN_PREPARE:
+	} else if (action == CPU_DOWN_PREPARE ||
+				action == CPU_DOWN_PREPARE_FROZEN) {
 		if (!cpumask_test_and_set_cpu(cpu, cpus_previously_online))
 			pr_debug("Total prev cores online tracked %u\n",
 				cpumask_weight(cpus_previously_online));
-		break;
-	case CPU_ONLINE:
-		if (core_control_enabled &&
-			(msm_thermal_info.core_control_mask & BIT(cpu)) &&
-			(cpus_offlined & BIT(cpu))) {
-			if (hotplug_task) {
-				pr_debug("Re-evaluate and hotplug CPU%d\n",
-					cpu);
-				complete(&hotplug_notify_complete);
-			} else {
-				/*
-				 * This will be auto-corrected next time
-				 * do_core_control() is called
-				 */
-				pr_err("CPU%d online, after thermal veto\n",
-					cpu);
-			}
-		}
-		break;
-	default:
-		break;
 	}
 
 	pr_debug("voting for CPU%d to be online\n", cpu);
@@ -3106,7 +3122,7 @@ static int hotplug_init_cpu_offlined(void)
 	long temp = 0;
 	uint32_t cpu = 0;
 
-	if (!hotplug_enabled || !hotplug_task)
+	if (!hotplug_enabled)
 		return 0;
 
 	mutex_lock(&core_control_mutex);
@@ -3123,7 +3139,8 @@ static int hotplug_init_cpu_offlined(void)
 
 		if (temp >= msm_thermal_info.hotplug_temp_degC)
 			cpus[cpu].offline = 1;
-		else
+		else if (temp <= (msm_thermal_info.hotplug_temp_degC -
+			msm_thermal_info.hotplug_temp_hysteresis_degC))
 			cpus[cpu].offline = 0;
 	}
 	mutex_unlock(&core_control_mutex);
@@ -3207,9 +3224,6 @@ static __ref int do_freq_mitigation(void *data)
 
 			max_freq_req = min(max_freq_req,
 					cpus[cpu].shutdown_max_freq);
-
-			max_freq_req = min(max_freq_req,
-					cpus[cpu].suspend_max_freq);
 
 			min_freq_req = max(min_freq_limit,
 					cpus[cpu].user_min_freq);
@@ -3352,8 +3366,6 @@ init_freq_thread:
 		pr_err("Failed to create frequency mitigation thread. err:%ld\n",
 				PTR_ERR(freq_mitigation_task));
 		return;
-	} else {
-		complete(&freq_mitigation_complete);
 	}
 }
 
@@ -4167,7 +4179,6 @@ cx_node_exit:
 	return ret;
 }
 
-#if 0
 /*
  * We will reset the cpu frequencies limits here. The core online/offline
  * status will be carried over to the process stopping the msm_thermal, as
@@ -4194,23 +4205,29 @@ static void __ref disable_msm_thermal(void)
 	update_cluster_freq();
 	put_online_cpus();
 }
-#endif
 
 static void interrupt_mode_init(void)
 {
-	if (!msm_thermal_probed) {
-		interrupt_mode_enable = true;
-		return;
-	}
 	if (polling_enabled) {
 		pr_info("Interrupt mode init\n");
 		polling_enabled = 0;
-		//disable_msm_thermal();
+		disable_msm_thermal();
 		hotplug_init();
 		freq_mitigation_init();
 		thermal_monitor_init();
 		msm_thermal_add_cx_nodes();
 		msm_thermal_add_gfx_nodes();
+	}
+}
+
+static void msm_thermal_suspend(bool suspend)
+{
+	if (suspend) {
+		disable_msm_thermal();
+		pr_info("suspended\n");
+	} else {
+		schedule_delayed_work(&check_temp_work, 0);
+		pr_info("resumed\n");
 	}
 }
 
@@ -4310,9 +4327,6 @@ static ssize_t __ref store_cpus_offlined(struct kobject *kobj,
 		pr_err("Invalid input %s. err:%d\n", buf, ret);
 		goto done_cc;
 	}
-
-	//return early
-	goto done_cc;
 
 	if (polling_enabled) {
 		pr_err("Ignoring request; polling thread is enabled.\n");
@@ -4615,7 +4629,6 @@ int msm_thermal_init(struct msm_thermal_data *pdata)
 		cpus[cpu].max_freq = false;
 		cpus[cpu].user_max_freq = UINT_MAX;
 		cpus[cpu].shutdown_max_freq = UINT_MAX;
-		cpus[cpu].suspend_max_freq = UINT_MAX;
 		cpus[cpu].user_min_freq = 0;
 		cpus[cpu].limited_max_freq = UINT_MAX;
 		cpus[cpu].limited_min_freq = 0;
@@ -5531,11 +5544,6 @@ static int probe_cc(struct device_node *node, struct msm_thermal_data *data,
 		hotplug_enabled = 1;
 	}
 
-	key = "qcom,core-limit-temp";
-	ret = of_property_read_u32(node, key, &data->core_limit_temp_degC);
-	if (ret)
-		goto read_node_fail;
-
 	key = "qcom,core-temp-hysteresis";
 	ret = of_property_read_u32(node, key, &data->core_temp_hysteresis_degC);
 	if (ret)
@@ -5861,17 +5869,22 @@ static int msm_thermal_dev_probe(struct platform_device *pdev)
 		goto fail;
 
 	key = "qcom,limit-temp";
-	ret = of_property_read_u32(node, key, &data.limit_temp_degC);
+	ret = of_property_read_u32(node, key, &temp_threshold);
+	if (ret)
+		goto fail;
+
+	key = "qcom,limit-temp-big";
+	ret = of_property_read_u32(node, key, &temp_big_threshold);
+	if (ret)
+		goto fail;
+
+	key = "qcom,big-core-start";
+	ret = of_property_read_u32(node, key, &big_core_start);
 	if (ret)
 		goto fail;
 
 	key = "qcom,temp-hysteresis";
 	ret = of_property_read_u32(node, key, &data.temp_hysteresis_degC);
-	if (ret)
-		goto fail;
-
-	key = "qcom,freq-step";
-	ret = of_property_read_u32(node, key, &data.bootup_freq_step);
 	if (ret)
 		goto fail;
 
@@ -5941,11 +5954,6 @@ static int msm_thermal_dev_probe(struct platform_device *pdev)
 	ret = msm_thermal_init(&data);
 	msm_thermal_probed = true;
 
-	if (interrupt_mode_enable) {
-		interrupt_mode_init();
-		interrupt_mode_enable = false;
-	}
-
 	return ret;
 fail:
 	if (ret)
@@ -5958,6 +5966,8 @@ fail:
 static int msm_thermal_dev_exit(struct platform_device *inp_dev)
 {
 	int i = 0;
+
+	fb_unregister_client(&msm_thermal_fb_notif);
 
 	unregister_reboot_notifier(&msm_thermal_reboot_notifier);
 	if (msm_therm_debugfs && msm_therm_debugfs->parent)
@@ -6014,9 +6024,46 @@ static struct platform_driver msm_thermal_device_driver = {
 	.remove = msm_thermal_dev_exit,
 };
 
+static int msm_thermal_fb_notifier_callback(struct notifier_block *self,
+				unsigned long event, void *data)
+{
+	struct fb_event *evdata = data;
+	int *blank;
+
+	if (event == FB_EVENT_BLANK) {
+		blank = evdata->data;
+
+		switch (*blank) {
+		case FB_BLANK_UNBLANK:
+			msm_thermal_suspend(false);
+			break;
+		case FB_BLANK_POWERDOWN:
+			msm_thermal_suspend(true);
+			break;
+		}
+	}
+
+	return 0;
+}
+
+struct notifier_block msm_thermal_fb_notif = {
+	.notifier_call = msm_thermal_fb_notifier_callback,
+};
+
 int __init msm_thermal_device_init(void)
 {
-	return platform_driver_register(&msm_thermal_device_driver);
+	int ret = 0;
+
+	if (fb_register_client(&msm_thermal_fb_notif))
+		pr_info("%s: Failed to register fb notifier.\n",
+			__func__);
+
+	ret = platform_driver_register(&msm_thermal_device_driver);
+	if (ret)
+		pr_info("%s: Failed to register msm_thermal driver.\n",
+			__func__);
+
+	return ret;
 }
 arch_initcall(msm_thermal_device_init);
 
@@ -6025,7 +6072,7 @@ int __init msm_thermal_late_init(void)
 	if (!msm_thermal_probed)
 		return 0;
 
-	if (num_possible_cpus() > 1 && core_control_enabled)
+	if (num_possible_cpus() > 1)
 		msm_thermal_add_cc_nodes();
 	msm_thermal_add_psm_nodes();
 	msm_thermal_add_vdd_rstr_nodes();
@@ -6037,7 +6084,6 @@ int __init msm_thermal_late_init(void)
 		}
 	}
 	msm_thermal_add_mx_nodes();
-	interrupt_mode_init();
 	create_cpu_topology_sysfs();
 	create_thermal_debugfs();
 	msm_thermal_add_bucket_info_nodes();
