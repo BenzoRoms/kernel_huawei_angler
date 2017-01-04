@@ -323,6 +323,11 @@ MAKEFLAGS += --include-dir=$(srctree)
 $(srctree)/scripts/Kbuild.include: ;
 include $(srctree)/scripts/Kbuild.include
 
+GRAPHITE	= -fgraphite -fgraphite-identity -floop-parallelize-all -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block -floop-flatten
+EXTRA_OPTS	= -fmodulo-sched -fmodulo-sched-allow-regmoves -g0 -ftree-loop-vectorize -ftree-loop-distribute-patterns -ftree-slp-vectorize -fvect-cost-model -ftree-partial-pre -fgcse-after-reload -fgcse-lm -fgcse-sm -fsched-spec-load -ffast-math -fsingle-precision-constant -fpredictive-commoning -mlow-precision-recip-sqrt -mpc-relative-literal-loads
+CORTEX_OPTS	= -march=armv8-a+crypto -mcpu=cortex-a57+crypto -mtune=cortex-a57.cortex-a53
+GCC_OPTS	= $(GRAPHITE) $(EXTRA_OPTS) $(CORTEX_OPTS)
+
 # Make variables (CC, etc...)
 
 AS		= $(CROSS_COMPILE)as
@@ -346,10 +351,6 @@ CHECK		= sparse
 
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
-GRAPHITE	= -fgraphite -fgraphite-identity -floop-parallelize-all -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block -floop-flatten
-EXTRA_OPTS	= -fmodulo-sched -fmodulo-sched-allow-regmoves -ftree-loop-vectorize -ftree-loop-distribute-patterns -ftree-slp-vectorize -fvect-cost-model -ftree-partial-pre -fgcse-after-reload -fgcse-lm -fgcse-sm -fsched-spec-load -ffast-math -fsingle-precision-constant -fpredictive-commoning -mlow-precision-recip-sqrt -mpc-relative-literal-loads
-CORTEX_OPTS	= -march=armv8-a+crypto -mcpu=cortex-a57.cortex-a53+crypto -mtune=cortex-a57.cortex-a53
-GCC_OPTS	= $(GRAPHITE) $(EXTRA_OPTS) $(CORTEX_OPTS)
 CFLAGS_MODULE   =
 AFLAGS_MODULE   =
 LDFLAGS_MODULE  = --strip-debug
