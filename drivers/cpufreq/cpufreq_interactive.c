@@ -31,7 +31,7 @@
 #include <linux/workqueue.h>
 #include <linux/kthread.h>
 #include <linux/slab.h>
-#include <linux/state_notifier.h>
+#include <linux/display_state.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/cpufreq_interactive.h>
@@ -227,7 +227,7 @@ static void cpufreq_interactive_timer_resched(unsigned long cpu,
 		add_timer(&ppol->policy_timer);
 	}
 
-	if (!state_suspended && tunables->timer_slack_val >= 0 &&
+	if (tunables->timer_slack_val >= 0 &&
 	    ppol->target_freq > ppol->policy->min) {
 		expires += usecs_to_jiffies(tunables->timer_slack_val);
 		del_timer(&ppol->policy_slack_timer);
@@ -254,7 +254,7 @@ static void cpufreq_interactive_timer_start(
 	spin_lock_irqsave(&ppol->load_lock, flags);
 	ppol->policy_timer.expires = expires;
 	add_timer(&ppol->policy_timer);
-	if (!state_suspended && tunables->timer_slack_val >= 0 &&
+	if (tunables->timer_slack_val >= 0 &&
 	    ppol->target_freq > ppol->policy->min) {
 		expires += usecs_to_jiffies(tunables->timer_slack_val);
 		ppol->policy_slack_timer.expires = expires;
@@ -469,6 +469,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	bool skip_hispeed_logic, skip_min_sample_time;
 	bool policy_max_fast_restore = false;
 	bool jump_to_max = false;
+	bool display_on = is_display_on();
 
 	if (!down_read_trylock(&ppol->enable_sem))
 		return;
@@ -487,10 +488,10 @@ static void cpufreq_interactive_timer(unsigned long data)
 	ppol->notif_pending = false;
 	ppol->last_evaluated_jiffy = get_jiffies_64();
 
-	if (!state_suspended &&
+	if (display_on &&
 		tunables->timer_rate != tunables->prev_timer_rate)
 		tunables->timer_rate = tunables->prev_timer_rate;
-	else if (state_suspended &&
+	else if (!display_on &&
 		tunables->timer_rate != tunables->timer_rate_screenoff) {
 		tunables->prev_timer_rate = tunables->timer_rate;
 		tunables->timer_rate
@@ -801,8 +802,8 @@ static int load_change_callback(struct notifier_block *nb, unsigned long val,
 	spin_unlock_irqrestore(&ppol->target_freq_lock, flags);
 
 	if (!hrtimer_is_queued(&ppol->notif_timer))
-		hrtimer_start(&ppol->notif_timer, ns_to_ktime(1),
-			      HRTIMER_MODE_REL);
+		__hrtimer_start_range_ns(&ppol->notif_timer, ns_to_ktime(1),
+					0, HRTIMER_MODE_REL, 0);
 exit:
 	up_read(&ppol->enable_sem);
 	return 0;
