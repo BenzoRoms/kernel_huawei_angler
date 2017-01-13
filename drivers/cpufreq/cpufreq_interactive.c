@@ -535,7 +535,12 @@ static void cpufreq_interactive_timer(unsigned long data)
 	spin_unlock(&ppol->load_lock);
 
 	cpu_load = loadadjfreq / ppol->target_freq;
-	tunables->boosted = tunables->boost_val || now < tunables->boostpulse_endtime;
+#ifdef CONFIG_CPU_BOOST
+	tunables->boosted = check_cpuboost(data) || tunables->boost_val ||
+#else
+	tunables->boosted = tunables->boost_val ||
+#endif
+	now < tunables->boostpulse_endtime;
 
 	if (now - ppol->max_freq_hyst_start_time <
 	    tunables->max_freq_hysteresis &&
