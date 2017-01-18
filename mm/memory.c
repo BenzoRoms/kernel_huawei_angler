@@ -122,6 +122,7 @@ unsigned long highest_memmap_pfn __read_mostly;
 
 #ifdef CONFIG_UKSM
 unsigned long uksm_zero_pfn __read_mostly;
+EXPORT_SYMBOL_GPL(uksm_zero_pfn);
 struct page *empty_uksm_zero_page;
 
 static int __init setup_uksm_zero_page(void)
@@ -1817,7 +1818,7 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				page = vm_normal_page(vma, start, *pte);
 				if (!page) {
 					if (!(gup_flags & FOLL_DUMP) &&
-					    (is_zero_pfn(pte_pfn(*pte))))
+					     is_zero_pfn(pte_pfn(*pte)))
 						page = pte_page(*pte);
 					else {
 						pte_unmap(pte);
