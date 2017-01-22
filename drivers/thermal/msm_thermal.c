@@ -91,30 +91,32 @@ static int big_core_start;
 /*
  * Tunable options
  *
- * poll_ms - msm_thermal will check device's temperature every this milli seconds.
- * temp_threshold - Limit the frequency when temp is reached to 'temp_threshold'.
- * temp_big_threshold - Turn off the big cores when temp is reached to 'temp_big_threshold'.
+ * poll_ms - msm_thermal will check the device's temperature every this milli seconds.
+ * temp_threshold - Limit the frequency of LITTLE when the temp is reached to this value.
+ * temp_big_threshold - Limit the frequency of big when the temp is reached to this value.
+ * temp_big_off_threshold - Turn off the big cores when the temp is reached to this value.
  * temp_step_little - If 'temp_step_little = 4' and 'temp_threshold = 60', frequency will decrease like below.
-		temp = 60 --> Little's max frequency will decrease one time.
-		temp = 62 --> Little's max frequency will decrease one time.
-		temp = 63 --> Little's max frequency will decrease one time.
-		temp = 64 --> Little's max frequency will decrease two times.
-		temp = 65 --> Little's max frequency will decrease two times.
-		temp = 68 --> Little's max frequency will decrease three times.
+		temp = 60 --> LITTLE's max frequency will decrease one step.
+		temp = 62 --> LITTLE's max frequency will decrease one step.
+		temp = 63 --> LITTLE's max frequency will decrease one step.
+		temp = 64 --> LITTLE's max frequency will decrease two steps.
+		temp = 65 --> LITTLE's max frequency will decrease two steps.
+		temp = 68 --> LITTLE's max frequency will decrease three steps.
  * temp_step_big - If 'temp_step_big = 2' and 'temp_threshold = 60', frequency will decrease like below.
-		temp = 60 --> Big's max frequency will decrease one time.
-		temp = 61 --> Big's max frequency will decrease one time.
-		temp = 62 --> Big's max frequency will decrease two time.
-		temp = 63 --> Big's max frequency will decrease two times.
-		temp = 64 --> Big's max frequency will decrease three times.
+		temp = 60 --> big's max frequency will decrease one step.
+		temp = 61 --> big's max frequency will decrease one step.
+		temp = 62 --> big's max frequency will decrease two steps.
+		temp = 63 --> big's max frequency will decrease two steps.
+		temp = 64 --> big's max frequency will decrease three steps.
  * freq_step_little - Frequency decrease step for little.
  * freq_step_big - Frequency decrease step for big.
- * temp_count_max_little - If this value is 3, little's max frequency will decrease 1 to 3 times.
- * temp_count_max_big - If this value is 5, big's max frequency will decrease 1 to 5 times.
+ * temp_count_max_little - If this value is 3, LITTLE's max frequency will decrease 1 to 3 steps.
+ * temp_count_max_big - If this value is 5, big's max frequency will decrease 1 to 5 steps.
  */
 unsigned int poll_ms;
 unsigned int temp_threshold;
 unsigned int temp_big_threshold;
+unsigned int temp_big_off_threshold;
 unsigned int temp_step_little = 4;
 unsigned int temp_step_big = 2;
 unsigned int freq_step_little = 1;
@@ -124,6 +126,7 @@ unsigned int temp_count_max_big = 6;
 module_param(poll_ms, int, 0644);
 module_param(temp_threshold, int, 0644);
 module_param(temp_big_threshold, int, 0644);
+module_param(temp_big_off_threshold, int, 0644);
 module_param(temp_step_little, int, 0644);
 module_param(temp_step_big, int, 0644);
 module_param(freq_step_little, int, 0644);
@@ -1341,53 +1344,74 @@ static void update_cluster_freq(void)
 }
 
 static int cur_index_little = 0, cur_index_big = 0;
-static bool restored = true;
+static bool restored_little = true, restored_big = true;
 
 static void do_cluster_freq_ctrl(long temp)
 {
 	uint32_t _cluster = 0;
 	int _cpu = -1, freq_idx = 0;
-	int temp_diff;
+	int temp_diff_little, temp_diff_big;
 	int index, step;
 	int index_little, index_big;
 	bool skip_little = false, skip_big = false;
 	struct cluster_info *cluster_ptr = NULL;
 
+	/* LITTLE */
 	if (temp < temp_threshold) {
-		if (restored)
+		if (restored_little && restored_big)
 			return;
-		else {
-			index_little = index_big = 0;
-			cur_index_big = cur_index_little = 0;
-			restored = true;
-			goto freq_control;
+		if (restored_little) {
+			skip_little = true;
+		} else {
+			index_little = 0;
+			cur_index_little = 0;
+			restored_little = true;
 		}
+	} else {
+		temp_diff_little = temp - temp_threshold;
+		if (temp_diff_little > 0) {
+			index_little = temp_diff_little / temp_step_little + 1;
+			if (index_little > temp_count_max_little)
+				index_little = temp_count_max_little;
+		} else
+			index_little = 1;
+
+		if (index_little == cur_index_little)
+			skip_little = true;
+		else
+			cur_index_little = index_little;
+
+		restored_little = false;
 	}
 
-	temp_diff = temp - temp_threshold;
-	if (temp_diff > 0) {
-		index_little = temp_diff / temp_step_little + 1;
-		index_big = temp_diff / temp_step_big + 1;
-		if (index_little > temp_count_max_little)
-			index_little = temp_count_max_little;
-		if (index_big > temp_count_max_big)
-			index_big = temp_count_max_big;
-	} else
-		index_big = index_little = 1;
+	/* big */
+	if (temp < temp_big_threshold) {
+		if (restored_little && restored_big)
+			return;
+		if (restored_big) {
+			skip_big = true;
+		} else {
+			index_big = 0;
+			cur_index_big = 0;
+			restored_big = true;
+		}
+	} else {
+		temp_diff_big = temp - temp_big_threshold;
+		if (temp_diff_big > 0) {
+			index_big = temp_diff_big / temp_step_big + 1;
+			if (index_big > temp_count_max_big)
+				index_big = temp_count_max_big;
+		} else
+			index_big = 1;
 
-	if (index_little == cur_index_little)
-		skip_little = true;
-	else
-		cur_index_little = index_little;
+		if (index_big == cur_index_big)
+			skip_big = true;
+		else
+			cur_index_big = index_big;
 
-	if (index_big == cur_index_big)
-		skip_big = true;
-	else
-		cur_index_big = index_big;
+		restored_big = false;
+	}
 
-	restored = false;
-
-freq_control:
 	get_online_cpus();
 	for (; _cluster < core_ptr->entity_count; _cluster++) {
 		cluster_ptr = &core_ptr->child_entity_ptr[_cluster];
@@ -2499,7 +2523,7 @@ static void __ref do_core_control(long temp)
 
 	mutex_lock(&core_control_mutex);
 	if (msm_thermal_info.core_control_mask &&
-		temp >= temp_big_threshold) {
+		temp >= temp_big_off_threshold) {
 		for (i = big_core_start; i < num_possible_cpus(); i++) { // Only on/off big cores
 			if (!(msm_thermal_info.core_control_mask & BIT(i)))
 				continue;
@@ -2521,7 +2545,7 @@ static void __ref do_core_control(long temp)
 			break;
 		}
 	} else if (msm_thermal_info.core_control_mask && cpus_offlined &&
-		temp <= (temp_big_threshold - msm_thermal_info.core_temp_hysteresis_degC)) {
+		temp <= (temp_big_off_threshold - msm_thermal_info.core_temp_hysteresis_degC)) {
 		for (i = big_core_start; i < num_possible_cpus(); i++) { // Only on/off big cores
 			if (!(cpus_offlined & BIT(i)))
 				continue;
@@ -5928,13 +5952,18 @@ static int msm_thermal_dev_probe(struct platform_device *pdev)
 	if (ret)
 		goto fail;
 
-	key = "qcom,limit-temp";
+	key = "qcom,limit-temp-little";
 	ret = of_property_read_u32(node, key, &temp_threshold);
 	if (ret)
 		goto fail;
 
 	key = "qcom,limit-temp-big";
 	ret = of_property_read_u32(node, key, &temp_big_threshold);
+	if (ret)
+		goto fail;
+
+	key = "qcom,temp-big-off";
+	ret = of_property_read_u32(node, key, &temp_big_off_threshold);
 	if (ret)
 		goto fail;
 

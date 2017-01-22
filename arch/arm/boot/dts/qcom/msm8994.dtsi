@@ -3428,8 +3428,9 @@
 		compatible = "qcom,msm-thermal";
 		qcom,sensor-id = <7>;
 		qcom,poll-ms = <500>;
-		qcom,limit-temp = <63>;
-		qcom,limit-temp-big = <75>;
+		qcom,limit-temp-little = <60>;
+		qcom,limit-temp-big = <70>;
+		qcom,temp-big-off = <80>;
 		qcom,big-core-start = <4>;
 		qcom,temp-hysteresis = <10>;
 		qcom,therm-reset-temp = <115>;
@@ -3452,7 +3453,7 @@
 		qcom,mx-restriction-temp-hysteresis = <10>;
 		qcom,mx-retention-min = <3>;
 		vdd-mx-supply = <&pm8994_s2_corner>;
-
+		qcom,disable-vdd-rstr;
 		qcom,vdd-restriction-temp = <5>;
 		qcom,vdd-restriction-temp-hysteresis = <10>;
 
@@ -3480,7 +3481,7 @@
 
 	qcom,bcl {
 		compatible = "qcom,bcl";
-		qcom,bcl-disable;
+		qcom,bcl-enable;
 		qcom,bcl-framework-interface;
 		qcom,bcl-freq-control-list = <&CPU4 &CPU5 &CPU6 &CPU7>;
 		qcom,bcl-soc-hotplug-list = <&CPU4 &CPU5 &CPU6 &CPU7>;
