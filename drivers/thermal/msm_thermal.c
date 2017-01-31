@@ -142,7 +142,7 @@ module_param(debug_freq_control, int, 0644);
 
 static struct msm_thermal_data msm_thermal_info;
 static struct delayed_work check_temp_work;
-static bool core_control_enabled;
+static bool core_control_enabled = false;
 static uint32_t cpus_offlined;
 static cpumask_var_t cpus_previously_online;
 static DEFINE_MUTEX(core_control_mutex);
@@ -1343,28 +1343,23 @@ static void update_cluster_freq(void)
 	}
 }
 
-static int cur_index_little = 0, cur_index_big = 0;
 static bool restored_little = true, restored_big = true;
 
-static void do_cluster_freq_ctrl(long temp)
+static void do_cluster_freq_ctrl(long temp, bool force_reset)
 {
 	uint32_t _cluster = 0;
 	int _cpu = -1, freq_idx = 0;
 	int temp_diff_little, temp_diff_big;
 	int index, step;
 	int index_little, index_big;
-	bool skip_little = false, skip_big = false;
 	struct cluster_info *cluster_ptr = NULL;
 
 	/* LITTLE */
-	if (temp < temp_threshold) {
+	if (temp < temp_threshold || force_reset) {
 		if (restored_little && restored_big)
 			return;
-		if (restored_little) {
-			skip_little = true;
-		} else {
+		if (!restored_little) {
 			index_little = 0;
-			cur_index_little = 0;
 			restored_little = true;
 		}
 	} else {
@@ -1376,23 +1371,15 @@ static void do_cluster_freq_ctrl(long temp)
 		} else
 			index_little = 1;
 
-		if (index_little == cur_index_little)
-			skip_little = true;
-		else
-			cur_index_little = index_little;
-
 		restored_little = false;
 	}
 
 	/* big */
-	if (temp < temp_big_threshold) {
+	if (temp < temp_big_threshold || force_reset) {
 		if (restored_little && restored_big)
 			return;
-		if (restored_big) {
-			skip_big = true;
-		} else {
+		if (!restored_big) {
 			index_big = 0;
-			cur_index_big = 0;
 			restored_big = true;
 		}
 	} else {
@@ -1404,11 +1391,6 @@ static void do_cluster_freq_ctrl(long temp)
 		} else
 			index_big = 1;
 
-		if (index_big == cur_index_big)
-			skip_big = true;
-		else
-			cur_index_big = index_big;
-
 		restored_big = false;
 	}
 
@@ -1419,12 +1401,12 @@ static void do_cluster_freq_ctrl(long temp)
 			continue;
 
 		if (first_cpu(cluster_ptr->cluster_cores) >= big_core_start) {
-			if (skip_big)
+			if (restored_big)
 				continue;
 			index = index_big;
 			step = freq_step_big;
 		} else {
-			if (skip_little)
+			if (restored_little)
 				continue;
 			index = index_little;
 			step = freq_step_little;
@@ -3030,7 +3012,7 @@ static void do_freq_control(long temp)
 	uint32_t max_freq = cpus[cpu].limited_max_freq;
 
 	if (core_ptr)
-		return do_cluster_freq_ctrl(temp);
+		return do_cluster_freq_ctrl(temp, false);
 	if (!freq_table_get)
 		return;
 
@@ -4274,19 +4256,23 @@ static void __ref disable_msm_thermal(void)
 	/* make sure check_temp is no longer running */
 	cancel_delayed_work_sync(&check_temp_work);
 
-	get_online_cpus();
-	for_each_possible_cpu(cpu) {
-		if (cpus[cpu].limited_max_freq == UINT_MAX &&
-			cpus[cpu].limited_min_freq == 0)
-			continue;
-		pr_info("Max frequency reset for CPU%d\n", cpu);
-		cpus[cpu].limited_max_freq = UINT_MAX;
-		cpus[cpu].limited_min_freq = 0;
-		if (!SYNC_CORE(cpu))
-			update_cpu_freq(cpu);
+	if (core_ptr) {
+		do_cluster_freq_ctrl(0, true);
+	} else {
+		get_online_cpus();
+		for_each_possible_cpu(cpu) {
+			if (cpus[cpu].limited_max_freq == UINT_MAX &&
+				cpus[cpu].limited_min_freq == 0)
+				continue;
+			pr_info("Max frequency reset for CPU%d\n", cpu);
+			cpus[cpu].limited_max_freq = UINT_MAX;
+			cpus[cpu].limited_min_freq = 0;
+			if (!SYNC_CORE(cpu))
+				update_cpu_freq(cpu);
+		}
+		update_cluster_freq();
+		put_online_cpus();
 	}
-	update_cluster_freq();
-	put_online_cpus();
 }
 
 static void interrupt_mode_init(void)
