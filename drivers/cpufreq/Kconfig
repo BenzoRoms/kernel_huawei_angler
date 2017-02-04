@@ -155,11 +155,11 @@ config CPU_FREQ_DEFAULT_GOV_BARRY_ALLEN
 	  loading your cpufreq low-level hardware driver, using the
 	  'barry_allen' governor for latency-sensitive workloads.
 
-config CPU_FREQ_DEFAULT_GOV_BLUACTIVE
-	bool "bluactive"
-	select CPU_FREQ_GOV_BLUACTIVE
+config CPU_FREQ_DEFAULT_GOV_BLU_ACTIVE
+	bool "blu_active"
+	select CPU_FREQ_GOV_BLU_ACTIVE
 	help
-	Use the CPUFreq governor 'bluactive' as default.
+	Use the CPUFreq governor 'blu_active' as default.
 
 config CPU_FREQ_DEFAULT_GOV_DESPAIR
 	bool "despair"
@@ -341,11 +341,11 @@ config CPU_FREQ_GOV_BARRY_ALLEN
 
 	  If in doubt, say N.
 
-config CPU_FREQ_GOV_BLUACTIVE
-	tristate "'bluactive' cpufreq governor"
+config CPU_FREQ_GOV_BLU_ACTIVE
+	tristate "'blu_active' cpufreq governor"
 	depends on CPU_FREQ
 	help
-	  'bluactive' - less aggressive version of interactive
+	  'blu_active' - less aggressive version of interactive
 
 config CPU_FREQ_GOV_DESPAIR
 	tristate "'despair' cpufreq governor"
