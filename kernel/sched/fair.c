@@ -4885,15 +4885,7 @@ static unsigned int sched_group_energy(struct energy_env *eenv)
 		 * sched_group?
 		 */
 		sd = highest_flag_domain(cpu, SD_SHARE_CAP_STATES);
-		if (!sd)
-			/*
-			 * We most probably raced with hotplug; returning a
-			 * wrong energy estimation is better than entering an
-			 * infinite loop.
-			 */
-			break;
-
-		if (sd->parent)
+		if (sd && sd->parent)
 			sg_shared_cap = sd->parent->groups;
 
 		for_each_domain(cpu, sd) {
@@ -4948,6 +4940,14 @@ static unsigned int sched_group_energy(struct energy_env *eenv)
 
 			} while (sg = sg->next, sg != sd->groups);
 		}
+
+		/*
+		 * If we raced with hotplug and got an sd NULL-pointer;
+		 * returning a wrong energy estimation is better than
+		 * entering an infinite loop.
+		 */
+		if (cpumask_test_cpu(cpu, &visit_cpus))
+			break;
 next_cpu:
 		continue;
 	}
