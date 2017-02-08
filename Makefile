@@ -239,10 +239,12 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
 	  else if [ -x /bin/bash ]; then echo /bin/bash; \
 	  else echo sh; fi ; fi)
 
-HOSTCC       = gcc
-HOSTCXX      = g++
-HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer
-HOSTCXXFLAGS = -O2
+CCACHE := $(shell which ccache)
+
+HOSTCC       = $(CCACHE) gcc
+HOSTCXX      = $(CCACHE) g++
+HOSTCFLAGS   = -O3 -fomit-frame-pointer -fgcse-las -fgraphite -floop-flatten -floop-parallelize-all -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block -pipe -std=gnu89 -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-unused-variable -Wno-unused-value -w -std=gnu11
+HOSTCXXFLAGS = -O3 -fgcse-las -fgraphite -floop-flatten -floop-parallelize-all -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block -pipe -w
 
 # Decide whether to build built-in, modular, or both.
 # Normally, just do built-in.
@@ -322,11 +324,23 @@ MAKEFLAGS += --include-dir=$(srctree)
 $(srctree)/scripts/Kbuild.include: ;
 include $(srctree)/scripts/Kbuild.include
 
+GRAPHITE       = -fgraphite -fgraphite-identity -fivopts -floop-parallelize-all \
+                       -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block
+
+EXTRA_OPTS     = -fmodulo-sched -fmodulo-sched-allow-regmoves -ftree-loop-vectorize \
+                       -ftree-loop-distribute-patterns -ftree-slp-vectorize -fvect-cost-model \
+                       -ftree-partial-pre -fgcse-after-reload -fgcse-lm -fgcse-sm -fsched-spec-load \
+                       -fsingle-precision-constant -fpredictive-commoning -g0
+
+CORTEX_OPTS    = -march=armv8-a+crc -mcpu=cortex-a57.cortex-a53+crc
+
+GCC_OPTS       = $(GRAPHITE) $(EXTRA_OPTS) $(CORTEX_OPTS)
+
 # Make variables (CC, etc...)
 
 AS		= $(CROSS_COMPILE)as
 LD		= $(CROSS_COMPILE)ld
-REAL_CC		= $(CROSS_COMPILE)gcc
+CC		= $(CCACHE) $(CROSS_COMPILE)gcc $(GCC_OPTS) -w
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
@@ -340,15 +354,11 @@ DEPMOD		= /sbin/depmod
 PERL		= perl
 CHECK		= sparse
 
-# Use the wrapper for the compiler.  This wrapper scans for new
-# warnings and causes the build to stop upon encountering them.
-CC		= $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)
-
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
 CFLAGS_MODULE   =
 AFLAGS_MODULE   =
-LDFLAGS_MODULE  =
+LDFLAGS_MODULE  = --strip-debug
 CFLAGS_KERNEL	=
 AFLAGS_KERNEL	=
 CFLAGS_GCOV	= -fprofile-arcs -ftest-coverage
@@ -373,11 +383,13 @@ LINUXINCLUDE    := \
 
 KBUILD_CPPFLAGS := -D__KERNEL__
 
-KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
-		   -fno-strict-aliasing -fno-common \
-		   -Werror-implicit-function-declaration \
-		   -Wno-format-security \
-		   -fno-delete-null-pointer-checks
+KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs -fno-strict-aliasing -fno-common \
+			-Werror-implicit-function-declaration -Wno-format-security -fmodulo-sched \
+			-Wno-bool-compare -Wno-memset-transposed-args -Wno-unused-const-variable \
+			-Wno-misleading-indentation -Wno-tautological-compare -ffast-math -funswitch-loops \
+			-fpredictive-commoning -fsingle-precision-constant -fshrink-wrap-separate \
+			-std=gnu11
+
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
 KBUILD_AFLAGS   := -D__ASSEMBLY__
@@ -575,10 +587,21 @@ endif # $(dot-config)
 all: vmlinux
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
-KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,)
+KBUILD_CFLAGS	+= -O3
 else
-KBUILD_CFLAGS	+= -O2
+KBUILD_CFLAGS	+= -Ofast
 endif
+
+KBUILD_CFLAGS	+= $(call cc-disable-warning,unused-const-variable,)
+
+KBUILD_CFLAGS	+= $(call cc-disable-warning,maybe-uninitialized,)
+
+KBUILD_CFLAGS   += $(call cc-disable-warning,format-truncation,)
+
+KBUILD_CFLAGS	+= $(call cc-option,-mlow-precision-recip-sqrt,) \
+		   $(call cc-option,-mpc-relative-literal-loads,)
+
+KBUILD_CFLAGS   += $(call cc-option,-fno-store-merging,)
 
 include $(srctree)/arch/$(SRCARCH)/Makefile
 
