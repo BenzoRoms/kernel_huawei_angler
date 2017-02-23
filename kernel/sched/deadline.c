@@ -384,6 +384,39 @@ static inline void setup_new_dl_entity(struct sched_dl_entity *dl_se)
 	dl_se->runtime = dl_se->dl_runtime;
 }
 
+static void __replenish_dl_entity(struct sched_dl_entity *dl_se,
+				  struct sched_dl_entity *pi_se)
+{
+	struct dl_rq *dl_rq = dl_rq_of_se(dl_se);
+	struct rq *rq = rq_of_dl_rq(dl_rq);
+
+	/*
+	 * We keep moving the deadline away until we get some
+	 * available runtime for the entity. This ensures correct
+	 * handling of situations where the runtime overrun is
+	 * arbitrary large.
+	 */
+	while (dl_se->runtime <= 0) {
+		dl_se->deadline += pi_se->dl_period;
+		dl_se->runtime += pi_se->dl_runtime;
+	}
+
+	/*
+	 * At this point, the deadline really should be "in
+	 * the future" with respect to rq->clock. If it's
+	 * not, we are, for some reason, lagging too much!
+	 * Anyway, after having warn userspace abut that,
+	 * we still try to keep the things running by
+	 * resetting the deadline and the budget of the
+	 * entity.
+	 */
+	if (dl_time_before(dl_se->deadline, rq_clock(rq))) {
+		//TJK printk_deferred_once("sched: DL replenish lagged to much\n");
+		dl_se->deadline = rq_clock(rq) + pi_se->dl_deadline;
+		dl_se->runtime = pi_se->dl_runtime;
+	}
+}
+
 /*
  * Pure Earliest Deadline First (EDF) scheduling does not deal with the
  * possibility of a entity lasting more than what it declared, and thus
@@ -422,31 +455,7 @@ static void replenish_dl_entity(struct sched_dl_entity *dl_se,
 	if (dl_se->dl_yielded && dl_se->runtime > 0)
 		dl_se->runtime = 0;
 
-	/*
-	 * We keep moving the deadline away until we get some
-	 * available runtime for the entity. This ensures correct
-	 * handling of situations where the runtime overrun is
-	 * arbitrary large.
-	 */
-	while (dl_se->runtime <= 0) {
-		dl_se->deadline += pi_se->dl_period;
-		dl_se->runtime += pi_se->dl_runtime;
-	}
-
-	/*
-	 * At this point, the deadline really should be "in
-	 * the future" with respect to rq->clock. If it's
-	 * not, we are, for some reason, lagging too much!
-	 * Anyway, after having warn userspace abut that,
-	 * we still try to keep the things running by
-	 * resetting the deadline and the budget of the
-	 * entity.
-	 */
-	if (dl_time_before(dl_se->deadline, rq_clock(rq))) {
-		//TJK printk_deferred_once("sched: DL replenish lagged to much\n");
-		dl_se->deadline = rq_clock(rq) + pi_se->dl_deadline;
-		dl_se->runtime = pi_se->dl_runtime;
-	}
+	__replenish_dl_entity(dl_se, pi_se);
 
 	if (dl_se->dl_yielded)
 		dl_se->dl_yielded = 0;
