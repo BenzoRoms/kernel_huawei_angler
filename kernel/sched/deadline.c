@@ -513,8 +513,9 @@ static void update_dl_entity(struct sched_dl_entity *dl_se,
 		return;
 	}
 
-	if (dl_time_before(dl_se->deadline, rq_clock(rq)) ||
-	    dl_entity_overflow(dl_se, pi_se, rq_clock(rq))) {
+	if (dl_time_before(dl_se->deadline, rq_clock(rq)))
+		replenish_dl_entity(dl_se, pi_se);
+	else if (dl_entity_overflow(dl_se, pi_se, rq_clock(rq))) {
 		dl_se->deadline = rq_clock(rq) + pi_se->dl_deadline;
 		dl_se->runtime = pi_se->dl_runtime;
 	}
@@ -657,13 +658,11 @@ again:
 	 *         __dequeue_task_dl()
 	 *     prev->on_rq = 0;
 	 *
-	 * We can be both throttled and !queued. Replenish the counter
-	 * but do not enqueue -- wait for our wakeup to do that.
+	 * We can be both throttled and !queued. Wait for our wakeup to
+	 * replenish runtime and enqueue p.
 	 */
-	if (!task_on_rq_queued(p)) {
-		replenish_dl_entity(dl_se, dl_se);
+	if (!task_on_rq_queued(p))
 		goto unlock;
-	}
 
 	enqueue_task_dl(rq, p, ENQUEUE_REPLENISH);
 	if (dl_task(rq->curr))
