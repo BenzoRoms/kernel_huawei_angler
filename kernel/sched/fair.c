@@ -2506,6 +2506,37 @@ static void dec_hmp_sched_stats_fair(struct rq *rq, struct task_struct *p)
 	_dec_hmp_sched_stats_fair(rq, p, 1);
 }
 
+static void fixup_hmp_sched_stats_fair(struct rq *rq, struct task_struct *p,
+				       u32 new_task_load)
+{
+	struct cfs_rq *cfs_rq;
+	struct sched_entity *se = &p->se;
+	u32 old_task_load = p->ravg.demand;
+
+	for_each_sched_entity(se) {
+		cfs_rq = cfs_rq_of(se);
+
+		dec_nr_big_small_task(&cfs_rq->hmp_stats, p);
+		fixup_cumulative_runnable_avg(&cfs_rq->hmp_stats, p,
+					      new_task_load);
+		inc_nr_big_small_task(&cfs_rq->hmp_stats, p);
+		if (cfs_rq_throttled(cfs_rq))
+			break;
+		/*
+		 * fixup_cumulative_runnable_avg() sets p->ravg.demand to
+		 * new_task_load.
+		 */
+		p->ravg.demand = old_task_load;
+	}
+
+	/* Fix up rq->hmp_stats only if we didn't find any throttled cfs_rq */
+	if (!se) {
+		dec_nr_big_small_task(&rq->hmp_stats, p);
+		fixup_cumulative_runnable_avg(&rq->hmp_stats, p, new_task_load);
+		inc_nr_big_small_task(&rq->hmp_stats, p);
+	}
+}
+
 static int task_will_be_throttled(struct task_struct *p);
 
 #else	/* CONFIG_CFS_BANDWIDTH */
@@ -2522,6 +2553,15 @@ dec_hmp_sched_stats_fair(struct rq *rq, struct task_struct *p)
 {
 	dec_nr_big_small_task(&rq->hmp_stats, p);
 	dec_cumulative_runnable_avg(&rq->hmp_stats, p);
+}
+
+static void
+fixup_hmp_sched_stats_fair(struct rq *rq, struct task_struct *p,
+			   u32 new_task_load)
+{
+	dec_nr_big_small_task(&rq->hmp_stats, p);
+	fixup_cumulative_runnable_avg(&rq->hmp_stats, p, new_task_load);
+	inc_nr_big_small_task(&rq->hmp_stats, p);
 }
 
 static inline int task_will_be_throttled(struct task_struct *p)
@@ -4917,14 +4957,6 @@ static void hrtick_start_fair(struct rq *rq, struct task_struct *p)
 				resched_task(p);
 			return;
 		}
-
-		/*
-		 * Don't schedule slices shorter than 10000ns, that just
-		 * doesn't make sense. Rely on vruntime for fairness.
-		 */
-		if (rq->curr != p)
-			delta = max_t(s64, 10000LL, delta);
-
 		hrtick_start(rq, delta);
 	}
 }
@@ -5754,7 +5786,8 @@ preempt:
 		set_last_buddy(se);
 }
 
-static struct task_struct *pick_next_task_fair(struct rq *rq)
+static struct task_struct *
+pick_next_task_fair(struct rq *rq, struct task_struct *prev)
 {
 	struct task_struct *p;
 	struct cfs_rq *cfs_rq = &rq->cfs;
@@ -5762,6 +5795,9 @@ static struct task_struct *pick_next_task_fair(struct rq *rq)
 
 	if (!cfs_rq->nr_running)
 		return NULL;
+
+	if (prev)
+		prev->sched_class->put_prev_task(rq, prev);
 
 	do {
 		se = pick_next_entity(cfs_rq);
@@ -8815,6 +8851,7 @@ const struct sched_class fair_sched_class = {
 #ifdef CONFIG_SCHED_HMP
 	.inc_hmp_sched_stats	= inc_hmp_sched_stats_fair,
 	.dec_hmp_sched_stats	= dec_hmp_sched_stats_fair,
+	.fixup_hmp_sched_stats	= fixup_hmp_sched_stats_fair,
 #endif
 };
 
