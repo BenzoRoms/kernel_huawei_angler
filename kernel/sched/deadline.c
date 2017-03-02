@@ -706,7 +706,8 @@ void init_dl_task_timer(struct sched_dl_entity *dl_se)
 	timer->function = dl_task_timer;
 }
 
-/* During the activation, CBS checks if it can reuse the current task's
+/*
+ * During the activation, CBS checks if it can reuse the current task's
  * runtime and period. If the deadline of the task is in the past, CBS
  * cannot use the runtime, and so it replenishes the task. This rule
  * works fine for implicit deadline tasks (deadline == period), and the
@@ -715,8 +716,8 @@ void init_dl_task_timer(struct sched_dl_entity *dl_se)
  * deadline, but before the next period. In this case, replenishing the
  * task would allow it to run for runtime / deadline. As in this case
  * deadline < period, CBS enables a task to run for more than the
- * runtime / period. In a very load system, this can cause the domino
- * effect, making other tasks to miss their deadlines.
+ * runtime / period. In a very loaded system, this can cause a domino
+ * effect, making other tasks miss their deadlines.
  *
  * To avoid this problem, in the activation of a constrained deadline
  * task after the deadline but before the next period, throttle the
@@ -963,7 +964,7 @@ static void dequeue_dl_entity(struct sched_dl_entity *dl_se)
 
 static inline bool dl_is_constrained(struct sched_dl_entity *dl_se)
 {
-	return dl_se->dl_runtime < dl_se->dl_period;
+	return dl_se->dl_deadline < dl_se->dl_period;
 }
 
 static void enqueue_task_dl(struct rq *rq, struct task_struct *p, int flags)
@@ -997,8 +998,8 @@ static void enqueue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 	 * If that is the case, the task will be throttled and
 	 * the replenishment timer will be set to the next period.
 	 */
-	if (!pi_se->dl_throttled && dl_is_constrained(pi_se))
-		dl_check_constrained_dl(pi_se);
+	if (!p->dl.dl_throttled && dl_is_constrained(&p->dl))
+		dl_check_constrained_dl(&p->dl);
 
 	/*
 	 * If p is throttled, we do nothing. In fact, if it exhausted
