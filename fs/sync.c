@@ -350,6 +350,7 @@ no_async:
                                 ktime_to_ms(fsync_diff), path);
                 }
 #endif
+		inc_syscfs(current);
 	}
 	return ret;
 }
