@@ -13,6 +13,10 @@
 #include <linux/sound_control.h>
 
 #define MAX_VALUE 20
+/*
+ * High Perf Mode
+ */
+extern int high_perf_mode;
 
 /*
  * Heaphones
@@ -111,6 +115,26 @@ static ssize_t camera_mic_boost_store(struct device *dev,
         return size;
 }
 
+static ssize_t hph_perf_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	size_t count = 0;
+
+	count += sprintf(buf, "%d\n", high_perf_mode);
+
+	return count;
+}
+
+static ssize_t hph_perf_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	if (buf[0] >= '0' && buf[0] <= '1' && buf[1] == '\n')
+		if (high_perf_mode != buf[0] - '0')
+			high_perf_mode = buf[0] - '0';
+
+	return count;
+}
+
 static ssize_t speaker_l_boost_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -162,6 +186,7 @@ static ssize_t speaker_r_boost_store(struct device *dev,
 static DEVICE_ATTR(volume_boost, 0664, headphones_boost_show,
 	headphones_boost_store);
 static DEVICE_ATTR(mic_boost, 0664, mic_boost_show, mic_boost_store);
+static DEVICE_ATTR(highperf_enabled, 0664, hph_perf_show, hph_perf_store);
 static DEVICE_ATTR(camera_mic_boost, 0664, camera_mic_boost_show, camera_mic_boost_store);
 static DEVICE_ATTR(speaker_l_boost, 0664, speaker_l_boost_show, speaker_l_boost_store);
 static DEVICE_ATTR(speaker_r_boost, 0664, speaker_r_boost_show, speaker_r_boost_store);
@@ -170,6 +195,7 @@ static struct attribute *soundcontrol_attributes[] =
 {
 	&dev_attr_volume_boost.attr,
 	&dev_attr_mic_boost.attr,
+	&dev_attr_highperf_enabled.attr,
 	&dev_attr_camera_mic_boost.attr,
 	&dev_attr_speaker_l_boost.attr,
 	&dev_attr_speaker_r_boost.attr,
