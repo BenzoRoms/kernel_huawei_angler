@@ -64,7 +64,7 @@ config IOSCHED_CFQ
 config CFQ_GROUP_IOSCHED
 	bool "CFQ Group Scheduling support"
 	depends on IOSCHED_CFQ && BLK_CGROUP
-	default n
+	default y
 	---help---
 	  Enable group IO scheduling in CFQ.
 
@@ -78,7 +78,7 @@ config IOSCHED_FIOPS
 
 config IOSCHED_BFQ
 	tristate "BFQ I/O scheduler"
-	default n
+	default y
 	---help---
 	  The BFQ I/O scheduler tries to distribute bandwidth among
 	  all processes according to their weights.
@@ -91,7 +91,7 @@ config IOSCHED_BFQ
 config CGROUP_BFQIO
 	bool "BFQ hierarchical scheduling support"
 	depends on CGROUPS && IOSCHED_BFQ=y
-	default n
+	default y
 	---help---
 	  Enable hierarchical scheduling in BFQ, using the cgroups
 	  filesystem interface.  The name of the subsystem will be
