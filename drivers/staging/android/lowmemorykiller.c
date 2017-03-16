@@ -40,6 +40,7 @@
 #include <linux/swap.h>
 #include <linux/rcupdate.h>
 #include <linux/notifier.h>
+#include <linux/zcache.h>
 
 #define CREATE_TRACE_POINTS
 #include "trace/lowmemorykiller.h"
@@ -81,7 +82,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	short selected_oom_score_adj;
 	int array_size = ARRAY_SIZE(lowmem_adj);
 	int other_free = global_page_state(NR_FREE_PAGES) - totalreserve_pages;
-	int other_file = global_page_state(NR_FILE_PAGES) -
+	int other_file = global_page_state(NR_FILE_PAGES) + zcache_pages() -
 						global_page_state(NR_SHMEM) -
 						global_page_state(NR_UNEVICTABLE) -
 						total_swapcache_pages();
@@ -160,6 +161,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 		lowmem_print(1, "Killing '%s' (%d), adj %hd,\n" \
 				"   to free %ldkB on behalf of '%s' (%d) because\n" \
 				"   cache %ldkB is below limit %ldkB for oom_score_adj %hd\n" \
+				"   Total zcache is %ldkB\n" \
 				"   Free memory is %ldkB above reserved\n",
 			     selected->comm, selected->pid,
 			     selected_oom_score_adj,
@@ -167,6 +169,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			     current->comm, current->pid,
 			     cache_size, cache_limit,
 			     min_score_adj,
+			     (long)zcache_pages() * (long)(PAGE_SIZE / 1024),
 			     free);
 
 		lowmem_deathpending_timeout = jiffies + HZ;
