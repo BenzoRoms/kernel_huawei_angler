@@ -107,7 +107,8 @@ static void cpudl_heapify(struct cpudl_item *e, int size, int idx)
 
 static inline int cpudl_maximum_cpu(struct cpudl *cp)
 {
-	return cp->elements[0].cpu;
+	int cpu = cp->elements[0].cpu;
+	return cp->elements[cpu].idx == IDX_INVALID ? -1 : cpu;
 }
 
 static inline u64 cpudl_maximum_dl(struct cpudl *cp)
@@ -127,7 +128,8 @@ static int cpudl_fast_find(struct cpudl *cp, struct task_struct *p)
 	max_dl = cpudl_maximum_dl(cp);
 	raw_spin_unlock_irqrestore(&cp->lock, flags);
 
-	if (cpumask_test_cpu(max_cpu, &p->cpus_allowed) &&
+	if (max_cpu != -1 &&
+	    cpumask_test_cpu(max_cpu, &p->cpus_allowed) &&
 	    dl_time_before(dl_se->deadline, max_dl))
 		return max_cpu;
 
