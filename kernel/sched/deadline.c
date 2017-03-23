@@ -1311,6 +1311,7 @@ static int find_later_rq(struct task_struct *task)
 	struct cpumask *later_mask = this_cpu_ptr(local_cpu_mask_dl);
 	int this_cpu = smp_processor_id();
 	int cpu = task_cpu(task);
+	int fallback_cpu = -1;
 
 	/* Make sure the mask is initialized first */
 	if (unlikely(!later_mask))
@@ -1371,12 +1372,28 @@ static int find_later_rq(struct task_struct *task)
 			 * already under consideration through later_mask.
 			 */
 			if (closest_cpu < nr_cpu_ids) {
+				/*
+				 * If current domain is SD_PREFER_SIBLING
+				 * flaged, we have to get more chances to
+				 * check other siblings.
+				 */
+				if (sd->flags & SD_PREFER_SIBLING) {
+					fallback_cpu = closest_cpu;
+					continue;
+				}
 				rcu_read_unlock();
 				return closest_cpu;
 			}
 		}
 	}
 	rcu_read_unlock();
+
+	/*
+	 * If fallback_cpu is valid, all our guesses failed *except* for
+	 * SD_PREFER_SIBLING domain. Now, we can return the fallback cpu.
+	 */
+	if (fallback_cpu != -1)
+		return fallback_cpu;
 
 	/*
 	 * At this point, all our guesses failed, we just return
