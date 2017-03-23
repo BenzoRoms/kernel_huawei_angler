@@ -10,6 +10,15 @@ struct cpudl_item {
 	u64 dl;
 	int cpu;
 	int idx;
+	/*
+	 * cpudl_slow_find() needs to pop one by one from
+	 * the heap tree until it eventually finds suitable
+	 * cpu considering task's affinity. After that,
+	 * we need to restore the tree to original state,
+	 * using the following restore_cpu and restore_dl.
+	 */
+	int restore_cpu;
+	u64 restore_dl;
 };
 
 struct cpudl {
