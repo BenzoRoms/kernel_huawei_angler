@@ -118,8 +118,14 @@ static inline u64 cpudl_maximum_dl(struct cpudl *cp)
 static int cpudl_fast_find(struct cpudl *cp, struct task_struct *p)
 {
 	const struct sched_dl_entity *dl_se = &p->dl;
-	int max_cpu = cpudl_maximum_cpu(cp);
-	u64 max_dl = cpudl_maximum_dl(cp);
+	unsigned long flags;
+	int max_cpu;
+	u64 max_dl;
+
+	raw_spin_lock_irqsave(&cp->lock, flags);
+	max_cpu = cpudl_maximum_cpu(cp);
+	max_dl = cpudl_maximum_dl(cp);
+	raw_spin_unlock_irqrestore(&cp->lock, flags);
 
 	if (cpumask_test_cpu(max_cpu, &p->cpus_allowed) &&
 	    dl_time_before(dl_se->deadline, max_dl))
