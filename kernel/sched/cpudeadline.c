@@ -116,6 +116,64 @@ static inline u64 cpudl_maximum_dl(struct cpudl *cp)
 	return cp->elements[0].dl;
 }
 
+/*
+ * __cpudl_clear - remove a cpu from the cpudl max-heap
+ * @cp: the cpudl max-heap context
+ * @cpu: the target cpu
+ *
+ * Notes: assumes cpu_rq(cpu)->lock and cpudl->lock are locked
+ *
+ * Returns: (void)
+ */
+static void __cpudl_clear(struct cpudl *cp, int cpu)
+{
+	int old_idx, new_cpu;
+
+	old_idx = cp->elements[cpu].idx;
+	if (old_idx == IDX_INVALID) {
+		/*
+		 * Nothing to remove if old_idx was invalid.
+		 * This could happen if a rq_offline_dl is
+		 * called for a CPU without -dl tasks running.
+		 */
+	} else {
+		new_cpu = cp->elements[cp->size - 1].cpu;
+		cp->elements[old_idx].dl = cp->elements[cp->size - 1].dl;
+		cp->elements[old_idx].cpu = new_cpu;
+		cp->size--;
+		cp->elements[new_cpu].idx = old_idx;
+		cp->elements[cpu].idx = IDX_INVALID;
+		cpudl_heapify(cp->elements, cp->size, old_idx);
+	}
+}
+
+/*
+ * __cpudl_set - update the cpudl max-heap
+ * @cp: the cpudl max-heap context
+ * @cpu: the target cpu
+ * @dl: the new earliest deadline for this cpu
+ *
+ * Notes: assumes cpu_rq(cpu)->lock and cpudl->lock are locked
+ *
+ * Returns: (void)
+ */
+static void __cpudl_set(struct cpudl *cp, int cpu, u64 dl)
+{
+	int old_idx;
+
+	old_idx = cp->elements[cpu].idx;
+	if (old_idx == IDX_INVALID) {
+		int new_idx = cp->size++;
+		cp->elements[new_idx].dl = dl;
+		cp->elements[new_idx].cpu = cpu;
+		cp->elements[cpu].idx = new_idx;
+		cpudl_heapify_up(cp->elements, cp->size, new_idx);
+	} else {
+		cp->elements[old_idx].dl = dl;
+		cpudl_heapify(cp->elements, cp->size, old_idx);
+	}
+}
+
 static int cpudl_fast_find(struct cpudl *cp, struct task_struct *p)
 {
 	const struct sched_dl_entity *dl_se = &p->dl;
@@ -176,31 +234,14 @@ out:
  */
 void cpudl_clear(struct cpudl *cp, int cpu)
 {
-	int old_idx, new_cpu;
 	unsigned long flags;
 
 	WARN_ON(!cpu_present(cpu));
 
 	raw_spin_lock_irqsave(&cp->lock, flags);
-
-	old_idx = cp->elements[cpu].idx;
-	if (old_idx == IDX_INVALID) {
-		/*
-		 * Nothing to remove if old_idx was invalid.
-		 * This could happen if a rq_offline_dl is
-		 * called for a CPU without -dl tasks running.
-		 */
-	} else {
-		new_cpu = cp->elements[cp->size - 1].cpu;
-		cp->elements[old_idx].dl = cp->elements[cp->size - 1].dl;
-		cp->elements[old_idx].cpu = new_cpu;
-		cp->size--;
-		cp->elements[new_cpu].idx = old_idx;
-		cp->elements[cpu].idx = IDX_INVALID;
-		cpudl_heapify(cp->elements, cp->size, old_idx);
-
+	__cpudl_clear(cp, cpu);
+	if (cp->elements[cpu].idx != IDX_INVALID)
 		cpumask_set_cpu(cpu, cp->free_cpus);
-	}
 	raw_spin_unlock_irqrestore(&cp->lock, flags);
 }
 
@@ -216,26 +257,14 @@ void cpudl_clear(struct cpudl *cp, int cpu)
  */
 void cpudl_set(struct cpudl *cp, int cpu, u64 dl)
 {
-	int old_idx;
 	unsigned long flags;
 
 	WARN_ON(!cpu_present(cpu));
 
 	raw_spin_lock_irqsave(&cp->lock, flags);
-
-	old_idx = cp->elements[cpu].idx;
-	if (old_idx == IDX_INVALID) {
-		int new_idx = cp->size++;
-		cp->elements[new_idx].dl = dl;
-		cp->elements[new_idx].cpu = cpu;
-		cp->elements[cpu].idx = new_idx;
-		cpudl_heapify_up(cp->elements, cp->size, new_idx);
+	__cpudl_set(cp, cpu, dl);
+	if (cp->elements[cpu].idx == IDX_INVALID)
 		cpumask_clear_cpu(cpu, cp->free_cpus);
-	} else {
-		cp->elements[old_idx].dl = dl;
-		cpudl_heapify(cp->elements, cp->size, old_idx);
-	}
-
 	raw_spin_unlock_irqrestore(&cp->lock, flags);
 }
 
