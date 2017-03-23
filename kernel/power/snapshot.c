@@ -352,7 +352,7 @@ static int create_mem_extents(struct list_head *list, gfp_t gfp_mask)
 		struct mem_extent *ext, *cur, *aux;
 
 		zone_start = zone->zone_start_pfn;
-		zone_end = zone_end_pfn(zone);
+		zone_end = zone->zone_start_pfn + zone->spanned_pages;
 
 		list_for_each_entry(ext, list, hook)
 			if (zone_start <= ext->end)
@@ -637,14 +637,13 @@ __register_nosave_region(unsigned long start_pfn, unsigned long end_pfn,
 		BUG_ON(!region);
 	} else
 		/* This allocation cannot fail */
-		region = memblock_virt_alloc(sizeof(struct nosave_region), 0);
+		region = alloc_bootmem(sizeof(struct nosave_region));
 	region->start_pfn = start_pfn;
 	region->end_pfn = end_pfn;
 	list_add_tail(&region->list, &nosave_regions);
  Report:
-	printk(KERN_INFO "PM: Registered nosave memory: [mem %#010llx-%#010llx]\n",
-		(unsigned long long) start_pfn << PAGE_SHIFT,
-		((unsigned long long) end_pfn << PAGE_SHIFT) - 1);
+	printk(KERN_INFO "PM: Registered nosave memory: %016lx - %016lx\n",
+		start_pfn << PAGE_SHIFT, end_pfn << PAGE_SHIFT);
 }
 
 /*
@@ -730,25 +729,6 @@ static void mark_nosave_pages(struct memory_bitmap *bm)
 	}
 }
 
-static bool is_nosave_page(unsigned long pfn)
-{
-	struct nosave_region *region;
-
-	list_for_each_entry(region, &nosave_regions, list) {
-		if (pfn >= region->start_pfn && pfn < region->end_pfn) {
-			pr_err("PM: %#010llx in e820 nosave region: "
-			       "[mem %#010llx-%#010llx]\n",
-			       (unsigned long long) pfn << PAGE_SHIFT,
-			       (unsigned long long) region->start_pfn << PAGE_SHIFT,
-			       ((unsigned long long) region->end_pfn << PAGE_SHIFT)
-					- 1);
-			return true;
-		}
-	}
-
-	return false;
-}
-
 /**
  *	create_basic_memory_bitmaps - create bitmaps needed for marking page
  *	frames that should not be saved and free page frames.  The pointers
@@ -762,10 +742,7 @@ int create_basic_memory_bitmaps(void)
 	struct memory_bitmap *bm1, *bm2;
 	int error = 0;
 
-	if (forbidden_pages_map && free_pages_map)
-		return 0;
-	else
-		BUG_ON(forbidden_pages_map || free_pages_map);
+	BUG_ON(forbidden_pages_map || free_pages_map);
 
 	bm1 = kzalloc(sizeof(struct memory_bitmap), GFP_KERNEL);
 	if (!bm1)
@@ -811,8 +788,7 @@ void free_basic_memory_bitmaps(void)
 {
 	struct memory_bitmap *bm1, *bm2;
 
-	if (WARN_ON(!(forbidden_pages_map && free_pages_map)))
-		return;
+	BUG_ON(!(forbidden_pages_map && free_pages_map));
 
 	bm1 = forbidden_pages_map;
 	bm2 = free_pages_map;
@@ -907,7 +883,7 @@ static unsigned int count_highmem_pages(void)
 			continue;
 
 		mark_free_pages(zone);
-		max_zone_pfn = zone_end_pfn(zone);
+		max_zone_pfn = zone->zone_start_pfn + zone->spanned_pages;
 		for (pfn = zone->zone_start_pfn; pfn < max_zone_pfn; pfn++)
 			if (saveable_highmem_page(zone, pfn))
 				n++;
@@ -971,7 +947,7 @@ static unsigned int count_data_pages(void)
 			continue;
 
 		mark_free_pages(zone);
-		max_zone_pfn = zone_end_pfn(zone);
+		max_zone_pfn = zone->zone_start_pfn + zone->spanned_pages;
 		for (pfn = zone->zone_start_pfn; pfn < max_zone_pfn; pfn++)
 			if (saveable_page(zone, pfn))
 				n++;
@@ -1064,7 +1040,7 @@ copy_data_pages(struct memory_bitmap *copy_bm, struct memory_bitmap *orig_bm)
 		unsigned long max_zone_pfn;
 
 		mark_free_pages(zone);
-		max_zone_pfn = zone_end_pfn(zone);
+		max_zone_pfn = zone->zone_start_pfn + zone->spanned_pages;
 		for (pfn = zone->zone_start_pfn; pfn < max_zone_pfn; pfn++)
 			if (page_is_saveable(zone, pfn))
 				memory_bm_set_bit(orig_bm, pfn);
@@ -1116,7 +1092,7 @@ void swsusp_free(void)
 	unsigned long pfn, max_zone_pfn;
 
 	for_each_populated_zone(zone) {
-		max_zone_pfn = zone_end_pfn(zone);
+		max_zone_pfn = zone->zone_start_pfn + zone->spanned_pages;
 		for (pfn = zone->zone_start_pfn; pfn < max_zone_pfn; pfn++)
 			if (pfn_valid(pfn)) {
 				struct page *page = pfn_to_page(pfn);
@@ -1287,7 +1263,7 @@ static void free_unnecessary_pages(void)
  * [number of saveable pages] - [number of pages that can be freed in theory]
  *
  * where the second term is the sum of (1) reclaimable slab pages, (2) active
- * and (3) inactive anonymous pages, (4) active and (5) inactive file pages,
+ * and (3) inactive anonymouns pages, (4) active and (5) inactive file pages,
  * minus mapped file pages.
  */
 static unsigned long minimum_image_size(unsigned long saveable)
@@ -1782,7 +1758,7 @@ static int mark_unsafe_pages(struct memory_bitmap *bm)
 
 	/* Clear page flags */
 	for_each_populated_zone(zone) {
-		max_zone_pfn = zone_end_pfn(zone);
+		max_zone_pfn = zone->zone_start_pfn + zone->spanned_pages;
 		for (pfn = zone->zone_start_pfn; pfn < max_zone_pfn; pfn++)
 			if (pfn_valid(pfn))
 				swsusp_unset_page_free(pfn_to_page(pfn));
@@ -1793,7 +1769,7 @@ static int mark_unsafe_pages(struct memory_bitmap *bm)
 	do {
 		pfn = memory_bm_next_pfn(bm);
 		if (likely(pfn != BM_END_OF_MAP)) {
-			if (likely(pfn_valid(pfn)) && !is_nosave_page(pfn))
+			if (likely(pfn_valid(pfn)))
 				swsusp_set_page_free(pfn_to_page(pfn));
 			else
 				return -EFAULT;

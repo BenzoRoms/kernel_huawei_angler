@@ -17,12 +17,6 @@ enum {
 	PM_QOS_CPU_DMA_LATENCY,
 	PM_QOS_NETWORK_LATENCY,
 	PM_QOS_NETWORK_THROUGHPUT,
-	PM_QOS_MIN_ONLINE_CPUS,
-	PM_QOS_MAX_ONLINE_CPUS,
-	PM_QOS_CPU_FREQ_MIN,
-	PM_QOS_CPU_FREQ_MAX,
-	PM_QOS_GPU_FREQ_MIN,
-	PM_QOS_GPU_FREQ_MAX,
 
 	/* insert new class ID */
 	PM_QOS_NUM_CLASSES,
@@ -40,12 +34,6 @@ enum pm_qos_flags_status {
 #define PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE	(2000 * USEC_PER_SEC)
 #define PM_QOS_NETWORK_LAT_DEFAULT_VALUE	(2000 * USEC_PER_SEC)
 #define PM_QOS_NETWORK_THROUGHPUT_DEFAULT_VALUE	0
-#define PM_QOS_MIN_ONLINE_CPUS_DEFAULT_VALUE	0
-#define PM_QOS_MAX_ONLINE_CPUS_DEFAULT_VALUE	LONG_MAX
-#define PM_QOS_CPU_FREQ_MIN_DEFAULT_VALUE	0
-#define PM_QOS_CPU_FREQ_MAX_DEFAULT_VALUE	LONG_MAX
-#define PM_QOS_GPU_FREQ_MIN_DEFAULT_VALUE	0
-#define PM_QOS_GPU_FREQ_MAX_DEFAULT_VALUE	LONG_MAX
 #define PM_QOS_DEV_LAT_DEFAULT_VALUE		0
 
 #define PM_QOS_FLAG_NO_POWER_OFF	(1 << 0)
@@ -107,7 +95,6 @@ struct pm_qos_constraints {
 	s32 target_value;	/* Do not change to 64 bit */
 	s32 target_per_cpu[NR_CPUS];
 	s32 default_value;
-	s32 no_constraint_value;
 	enum pm_qos_type type;
 	struct blocking_notifier_head *notifiers;
 };

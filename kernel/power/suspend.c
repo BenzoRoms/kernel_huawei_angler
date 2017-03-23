@@ -14,7 +14,6 @@
 #include <linux/init.h>
 #include <linux/console.h>
 #include <linux/cpu.h>
-#include <linux/cpuidle.h>
 #include <linux/syscalls.h>
 #include <linux/gfp.h>
 #include <linux/io.h>
@@ -41,22 +40,14 @@ struct pm_sleep_state pm_states[PM_SUSPEND_MAX] = {
 };
 
 static const struct platform_suspend_ops *suspend_ops;
-static const struct platform_freeze_ops *freeze_ops;
 
 static bool need_suspend_ops(suspend_state_t state)
 {
-	return state > PM_SUSPEND_FREEZE;
+	return !!(state > PM_SUSPEND_FREEZE);
 }
 
 static DECLARE_WAIT_QUEUE_HEAD(suspend_freeze_wait_head);
 static bool suspend_freeze_wake;
-
-void freeze_set_ops(const struct platform_freeze_ops *ops)
-{
-	lock_system_sleep();
-	freeze_ops = ops;
-	unlock_system_sleep();
-}
 
 static void freeze_begin(void)
 {
@@ -65,9 +56,7 @@ static void freeze_begin(void)
 
 static void freeze_enter(void)
 {
-	cpuidle_resume();
 	wait_event(suspend_freeze_wait_head, suspend_freeze_wake);
-	cpuidle_pause();
 }
 
 void freeze_wake(void)
@@ -222,7 +211,6 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 		goto Platform_wake;
 	}
 
-	ftrace_stop();
 	error = disable_nonboot_cpus();
 	if (error || suspend_test(TEST_CPUS)) {
 		log_suspend_abort_reason("Disabling non-boot cpus failed");
@@ -254,7 +242,6 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 
  Enable_cpus:
 	enable_nonboot_cpus();
-	ftrace_start();
 
  Platform_wake:
 	if (need_suspend_ops(state) && suspend_ops->wake)
@@ -340,16 +327,13 @@ int suspend_devices_and_enter(suspend_state_t state)
 		error = suspend_ops->begin(state);
 		if (error)
 			goto Close;
-	} else if (state == PM_SUSPEND_FREEZE && freeze_ops->begin) {
-		error = freeze_ops->begin();
-		if (error)
-			goto Close;
 	}
 	suspend_console();
+	ftrace_stop();
 	suspend_test_start();
 	error = dpm_suspend_start(PMSG_SUSPEND);
 	if (error) {
-		pr_err("PM: Some devices failed to suspend, or early wake event detected\n");
+		printk(KERN_ERR "PM: Some devices failed to suspend\n");
 		log_suspend_abort_reason("Some devices failed to suspend");
 		goto Recover_platform;
 	}
@@ -366,13 +350,11 @@ int suspend_devices_and_enter(suspend_state_t state)
 	if (!resumed)
 		dpm_resume_end(PMSG_RESUME);
 	suspend_test_finish("resume devices");
+	ftrace_start();
 	resume_console();
  Close:
 	if (need_suspend_ops(state) && suspend_ops->end)
 		suspend_ops->end();
-	else if (state == PM_SUSPEND_FREEZE && freeze_ops->end)
-		freeze_ops->end();
-
 	trace_machine_suspend(PWR_EVENT_EXIT);
 	return error;
 
@@ -424,11 +406,9 @@ static int enter_state(suspend_state_t state)
 	if (state == PM_SUSPEND_FREEZE)
 		freeze_begin();
 
-#ifdef CONFIG_PM_SYNC_BEFORE_SUSPEND
 	printk(KERN_INFO "PM: Syncing filesystems ... ");
 	sys_sync();
 	printk("done.\n");
-#endif
 
 	pr_debug("PM: Preparing system for %s sleep\n", pm_states[state].label);
 	error = suspend_prepare(state);
