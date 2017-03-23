@@ -174,6 +174,42 @@ static void __cpudl_set(struct cpudl *cp, int cpu, u64 dl)
 	}
 }
 
+static int cpudl_slow_find(struct cpudl *cp, struct task_struct *p)
+{
+	const struct sched_dl_entity *dl_se = &p->dl;
+	unsigned long flags;
+	int prev_cpu = -1;
+	int max_cpu;
+	u64 max_dl;
+
+	raw_spin_lock_irqsave(&cp->lock, flags);
+	max_cpu = cpudl_maximum_cpu(cp);
+	max_dl = cpudl_maximum_dl(cp);
+
+	while (max_cpu != -1) {
+		if (cpumask_test_cpu(max_cpu, &p->cpus_allowed) &&
+		    dl_time_before(dl_se->deadline, max_dl))
+			break;
+
+		/* Pick up the next. */
+		cp->elements[max_cpu].restore_cpu = prev_cpu;
+		cp->elements[max_cpu].restore_dl = max_dl;
+		prev_cpu = max_cpu;
+		__cpudl_clear(cp, max_cpu);
+		max_cpu = cpudl_maximum_cpu(cp);
+		max_dl = cpudl_maximum_dl(cp);
+	}
+
+	/* Restore the heap tree */
+	while (prev_cpu != -1) {
+		__cpudl_set(cp, prev_cpu, cp->elements[prev_cpu].restore_dl);
+		prev_cpu = cp->elements[prev_cpu].restore_cpu;
+	}
+
+	raw_spin_unlock_irqrestore(&cp->lock, flags);
+	return max_cpu;
+}
+
 static int cpudl_fast_find(struct cpudl *cp, struct task_struct *p)
 {
 	const struct sched_dl_entity *dl_se = &p->dl;
@@ -213,6 +249,8 @@ int cpudl_find(struct cpudl *cp, struct task_struct *p,
 		goto out;
 	} else {
 		best_cpu = cpudl_fast_find(cp, p);
+		if (best_cpu == -1)
+			best_cpu = cpudl_slow_find(cp, p);
 		if (best_cpu != -1 && later_mask)
 			cpumask_set_cpu(best_cpu, later_mask);
 	}
