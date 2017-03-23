@@ -1603,6 +1603,7 @@ static int find_lowest_rq(struct task_struct *task)
 	struct cpumask *lowest_mask = this_cpu_ptr(local_cpu_mask);
 	int this_cpu = smp_processor_id();
 	int cpu      = task_cpu(task);
+	int fallback_cpu = -1;
 
 	/* Make sure the mask is initialized first */
 	if (unlikely(!lowest_mask))
@@ -1650,12 +1651,28 @@ static int find_lowest_rq(struct task_struct *task)
 			best_cpu = cpumask_first_and(lowest_mask,
 						     sched_domain_span(sd));
 			if (best_cpu < nr_cpu_ids) {
+				/*
+				 * If current domain is SD_PREFER_SIBLING
+				 * flaged, we have to get more chances to
+				 * check other siblings.
+				 */
+				if (sd->flags & SD_PREFER_SIBLING) {
+					fallback_cpu = best_cpu;
+					continue;
+				}
 				rcu_read_unlock();
 				return best_cpu;
 			}
 		}
 	}
 	rcu_read_unlock();
+
+	/*
+	 * If fallback_cpu is valid, all our quesses failed *except* for
+	 * SD_PREFER_SIBLING domain. Now, we can return the fallback cpu.
+	 */
+	if (fallback_cpu != -1)
+		return fallback_cpu;
 
 	/*
 	 * And finally, if there were no matches within the domains
