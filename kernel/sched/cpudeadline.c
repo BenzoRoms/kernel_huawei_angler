@@ -115,6 +115,19 @@ static inline u64 cpudl_maximum_dl(struct cpudl *cp)
 	return cp->elements[0].dl;
 }
 
+static int cpudl_fast_find(struct cpudl *cp, struct task_struct *p)
+{
+	const struct sched_dl_entity *dl_se = &p->dl;
+	int max_cpu = cpudl_maximum_cpu(cp);
+	u64 max_dl = cpudl_maximum_dl(cp);
+
+	if (cpumask_test_cpu(max_cpu, &p->cpus_allowed) &&
+	    dl_time_before(dl_se->deadline, max_dl))
+		return max_cpu;
+
+	return -1;
+}
+
 /*
  * cpudl_find - find the best (later-dl) CPU in the system
  * @cp: the cpudl max-heap context
@@ -127,16 +140,14 @@ int cpudl_find(struct cpudl *cp, struct task_struct *p,
 	       struct cpumask *later_mask)
 {
 	int best_cpu = -1;
-	const struct sched_dl_entity *dl_se = &p->dl;
 
 	if (later_mask &&
 	    cpumask_and(later_mask, cp->free_cpus, &p->cpus_allowed)) {
 		best_cpu = cpumask_any(later_mask);
 		goto out;
-	} else if (cpumask_test_cpu(cpudl_maximum_cpu(cp), &p->cpus_allowed) &&
-			dl_time_before(dl_se->deadline, cpudl_maximum_dl(cp))) {
-		best_cpu = cpudl_maximum_cpu(cp);
-		if (later_mask)
+	} else {
+		best_cpu = cpudl_fast_find(cp, p);
+		if (best_cpu != -1 && later_mask)
 			cpumask_set_cpu(best_cpu, later_mask);
 	}
 
