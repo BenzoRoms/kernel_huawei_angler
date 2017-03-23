@@ -31,14 +31,14 @@ static inline int right_child(int i)
 	return (i << 1) + 2;
 }
 
-static void cpudl_heapify_down(struct cpudl *cp, int idx)
+static void cpudl_heapify_down(struct cpudl_item *e, int size, int idx)
 {
 	int l, r, largest;
 
-	int orig_cpu = cp->elements[idx].cpu;
-	u64 orig_dl = cp->elements[idx].dl;
+	int orig_cpu = e[idx].cpu;
+	u64 orig_dl = e[idx].dl;
 
-	if (left_child(idx) >= cp->size)
+	if (left_child(idx) >= size)
 		return;
 
 	/* adapted from lib/prio_heap.c */
@@ -49,63 +49,60 @@ static void cpudl_heapify_down(struct cpudl *cp, int idx)
 		largest = idx;
 		largest_dl = orig_dl;
 
-		if ((l < cp->size) && dl_time_before(orig_dl,
-						cp->elements[l].dl)) {
+		if ((l < size) && dl_time_before(orig_dl, e[l].dl)) {
 			largest = l;
-			largest_dl = cp->elements[l].dl;
+			largest_dl = e[l].dl;
 		}
-		if ((r < cp->size) && dl_time_before(largest_dl,
-						cp->elements[r].dl))
+		if ((r < size) && dl_time_before(largest_dl, e[r].dl))
 			largest = r;
 
 		if (largest == idx)
 			break;
 
 		/* pull largest child onto idx */
-		cp->elements[idx].cpu = cp->elements[largest].cpu;
-		cp->elements[idx].dl = cp->elements[largest].dl;
-		cp->elements[cp->elements[idx].cpu].idx = idx;
+		e[idx].cpu = e[largest].cpu;
+		e[idx].dl = e[largest].dl;
+		e[e[idx].cpu].idx = idx;
 		idx = largest;
 	}
 	/* actual push down of saved original values orig_* */
-	cp->elements[idx].cpu = orig_cpu;
-	cp->elements[idx].dl = orig_dl;
-	cp->elements[cp->elements[idx].cpu].idx = idx;
+	e[idx].cpu = orig_cpu;
+	e[idx].dl = orig_dl;
+	e[e[idx].cpu].idx = idx;
 }
 
-static void cpudl_heapify_up(struct cpudl *cp, int idx)
+static void cpudl_heapify_up(struct cpudl_item *e, int size, int idx)
 {
 	int p;
 
-	int orig_cpu = cp->elements[idx].cpu;
-	u64 orig_dl = cp->elements[idx].dl;
+	int orig_cpu = e[idx].cpu;
+	u64 orig_dl = e[idx].dl;
 
 	if (idx == 0)
 		return;
 
 	do {
 		p = parent(idx);
-		if (dl_time_before(orig_dl, cp->elements[p].dl))
+		if (dl_time_before(orig_dl, e[p].dl))
 			break;
 		/* pull parent onto idx */
-		cp->elements[idx].cpu = cp->elements[p].cpu;
-		cp->elements[idx].dl = cp->elements[p].dl;
-		cp->elements[cp->elements[idx].cpu].idx = idx;
+		e[idx].cpu = e[p].cpu;
+		e[idx].dl = e[p].dl;
+		e[e[idx].cpu].idx = idx;
 		idx = p;
 	} while (idx != 0);
 	/* actual push up of saved original values orig_* */
-	cp->elements[idx].cpu = orig_cpu;
-	cp->elements[idx].dl = orig_dl;
-	cp->elements[cp->elements[idx].cpu].idx = idx;
+	e[idx].cpu = orig_cpu;
+	e[idx].dl = orig_dl;
+	e[e[idx].cpu].idx = idx;
 }
 
-static void cpudl_heapify(struct cpudl *cp, int idx)
+static void cpudl_heapify(struct cpudl_item *e, int size, int idx)
 {
-	if (idx > 0 && dl_time_before(cp->elements[parent(idx)].dl,
-				cp->elements[idx].dl))
-		cpudl_heapify_up(cp, idx);
+	if (idx > 0 && dl_time_before(e[parent(idx)].dl, e[idx].dl))
+		cpudl_heapify_up(e, size, idx);
 	else
-		cpudl_heapify_down(cp, idx);
+		cpudl_heapify_down(e, size, idx);
 }
 
 static inline int cpudl_maximum(struct cpudl *cp)
@@ -176,7 +173,7 @@ void cpudl_clear(struct cpudl *cp, int cpu)
 		cp->size--;
 		cp->elements[new_cpu].idx = old_idx;
 		cp->elements[cpu].idx = IDX_INVALID;
-		cpudl_heapify(cp, old_idx);
+		cpudl_heapify(cp->elements, cp->size, old_idx);
 
 		cpumask_set_cpu(cpu, cp->free_cpus);
 	}
@@ -208,11 +205,11 @@ void cpudl_set(struct cpudl *cp, int cpu, u64 dl)
 		cp->elements[new_idx].dl = dl;
 		cp->elements[new_idx].cpu = cpu;
 		cp->elements[cpu].idx = new_idx;
-		cpudl_heapify_up(cp, new_idx);
+		cpudl_heapify_up(cp->elements, cp->size, new_idx);
 		cpumask_clear_cpu(cpu, cp->free_cpus);
 	} else {
 		cp->elements[old_idx].dl = dl;
-		cpudl_heapify(cp, old_idx);
+		cpudl_heapify(cp->elements, cp->size, old_idx);
 	}
 
 	raw_spin_unlock_irqrestore(&cp->lock, flags);
