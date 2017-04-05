@@ -94,7 +94,6 @@ static void f2fs_write_end_io(struct bio *bio, int err)
 
 	bio_for_each_segment_all(bvec, bio, i) {
 		struct page *page = bvec->bv_page;
-		enum count_type type = WB_DATA_TYPE(page);
 
 		if (IS_DUMMY_WRITTEN_PAGE(page)) {
 			set_page_private(page, (unsigned long)NULL);
@@ -113,7 +112,7 @@ static void f2fs_write_end_io(struct bio *bio, int err)
 			set_bit(AS_EIO, &page->mapping->flags);
 			f2fs_stop_checkpoint(sbi, true);
 		}
-		dec_page_count(sbi, type);
+		dec_page_count(sbi, WB_DATA_TYPE(page));
 		clear_cold_data(page);
 		end_page_writeback(page);
 	}
@@ -386,7 +385,7 @@ int f2fs_submit_page_mbio(struct f2fs_io_info *fio)
 	fio->submitted = 1;
 
 	if (!is_read)
-		inc_page_count(sbi, WB_DATA_TYPE(bio_page));
+		inc_page_count(sbi, WB_DATA_TYPE(fio->page));
 
 	down_write(&io->io_rwsem);
 
@@ -400,7 +399,7 @@ alloc_new:
 				fio->new_blkaddr & F2FS_IO_SIZE_MASK(sbi)) {
 			err = -EAGAIN;
 			if (!is_read)
-				dec_page_count(sbi, WB_DATA_TYPE(bio_page));
+				dec_page_count(sbi, WB_DATA_TYPE(fio->page));
 			goto out_fail;
 		}
 		io->bio = __bio_alloc(sbi, fio->new_blkaddr,
