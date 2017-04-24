@@ -509,13 +509,63 @@ static bool dl_entity_overflow(struct sched_dl_entity *dl_se,
 }
 
 /*
+ * Revised wakeup rule [1]: For self-suspending tasks, rather then
+ * re-initializing task's runtime and deadline, the revised wakeup
+ * rule adjusts the task's runtime to avoid the task to overrun its
+ * density.
+ *
+ * Reasoning: a task may overrun the density if:
+ *    runtime / (deadline - t) > dl_runtime / dl_deadline
+ *
+ * Therefore, runtime can be adjusted to:
+ *     runtime = (dl_runtime / dl_deadline) * (deadline - t)
+ *
+ * In such way that runtime will be equals to the maximum density
+ * the task can use without breaking any rule.
+ *
+ * [1] Luca Abeni, Giuseppe Lipari, and Juri Lelli. 2015. Constant
+ * bandwidth server revisited. SIGBED Rev. 11, 4 (January 2015), 19-24.
+ */
+static void
+update_dl_revised_wakeup(struct sched_dl_entity *dl_se, struct rq *rq)
+{
+	u64 density = div64_u64(dl_se->dl_runtime << 20, dl_se->dl_deadline);
+	u64 laxity = dl_se->deadline - rq_clock(rq);
+
+	BUG_ON(laxity < 0);
+
+	dl_se->runtime = density * laxity >> 20;
+}
+
+static inline bool dl_is_constrained(struct sched_dl_entity *dl_se)
+{
+	return dl_se->dl_deadline < dl_se->dl_period;
+}
+
+/*
  * When a -deadline entity is queued back on the runqueue, its runtime and
  * deadline might need updating.
  *
- * The policy here is that we update the deadline of the entity only if:
- *  - the current deadline is in the past,
+ * Currently, we are using two different CBS rules, 1) the original CBS
+ * for implicit deadline tasks; 2) the revisited CBS for constrained
+ * deadline ones. The reason is that the original CBS can cause a constrained
+ * deadline task to be replenished deadline/period times in a period, in
+ * the worst case, hence allowing it to run more than runtime/period.
+ * In order to prevent this misbehave, the revisited CBS is used for
+ * constrained deadline tasks. In the revisited CBS, in the case of an
+ * overload, rather than replenishing & postponing the deadline, the
+ * remaining runtime of a task is reduced to avoid runtime overflow.
+ *
+ * So, for implicit deadline tasks, the policy here is that the runtime &
+ * deadline of an entity are update if and only if., either:
+ *  - the current deadline is in the past, or
  *  - using the remaining runtime with the current deadline would make
  *    the entity exceed its bandwidth.
+ *
+ * For constrained deadline tasks, the policy here is that the runtime
+ * is reduced to avoid exceeding its bandwidth if:
+ *   - using the remaining runtime with the current deadline would make
+ *     the entity exceed its bandwidth.
  */
 static void update_dl_entity(struct sched_dl_entity *dl_se,
 			     struct sched_dl_entity *pi_se)
@@ -525,6 +575,14 @@ static void update_dl_entity(struct sched_dl_entity *dl_se,
 
 	if (dl_time_before(dl_se->deadline, rq_clock(rq)) ||
 	    dl_entity_overflow(dl_se, pi_se, rq_clock(rq))) {
+
+		if (unlikely(dl_is_constrained(dl_se) &&
+		    !dl_time_before(dl_se->deadline, rq_clock(rq)) &&
+		    !dl_se->dl_boosted)){
+			update_dl_revised_wakeup(dl_se, rq);
+			return;
+		}
+
 		dl_se->deadline = rq_clock(rq) + pi_se->dl_deadline;
 		dl_se->runtime = pi_se->dl_runtime;
 	}
@@ -1001,11 +1059,6 @@ enqueue_dl_entity(struct sched_dl_entity *dl_se,
 static void dequeue_dl_entity(struct sched_dl_entity *dl_se)
 {
 	__dequeue_dl_entity(dl_se);
-}
-
-static inline bool dl_is_constrained(struct sched_dl_entity *dl_se)
-{
-	return dl_se->dl_deadline < dl_se->dl_period;
 }
 
 static void enqueue_task_dl(struct rq *rq, struct task_struct *p, int flags)
