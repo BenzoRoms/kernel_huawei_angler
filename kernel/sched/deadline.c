@@ -803,8 +803,13 @@ static inline void dl_check_constrained_dl(struct sched_dl_entity *dl_se)
 }
 
 static
-int dl_runtime_exceeded(struct sched_dl_entity *dl_se)
+int dl_runtime_exceeded(struct rq *rq, struct sched_dl_entity *dl_se)
 {
+	bool dmiss = dl_time_before(dl_se->deadline, rq_clock(rq));
+
+	if (dmiss && dl_se->runtime > 0)
+		dl_se->runtime = 0;
+
 	return (dl_se->runtime <= 0);
 }
 
@@ -852,7 +857,7 @@ static void update_curr_dl(struct rq *rq)
 	dl_se->runtime -= delta_exec;
 
 throttle:
-	if (dl_runtime_exceeded(dl_se) || dl_se->dl_yielded) {
+	if (dl_runtime_exceeded(rq, dl_se) || dl_se->dl_yielded) {
 		dl_se->dl_throttled = 1;
 		__dequeue_task_dl(rq, curr, 0);
 		if (unlikely(dl_se->dl_boosted || !start_dl_timer(curr)))
