@@ -5343,7 +5343,7 @@ static void migrate_tasks(unsigned int dead_cpu)
 
 		next = pick_next_task(rq, &fake_task);
 		BUG_ON(!next);
-		next->sched_class->put_prev_task(rq, next);
+		put_prev_task(rq, next);
 
 		/* Find suitable destination for @next, with force if needed. */
 		dest_cpu = select_fallback_rq(dead_cpu, next);
