@@ -4118,7 +4118,8 @@ static inline void hrtick_update(struct rq *rq)
 }
 #endif
 
-unsigned int __read_mostly sysctl_sched_capacity_margin = 1280; /* ~20% margin */
+#define SCHED_CAPACITY_MARGIN 1280
+unsigned int __read_mostly sysctl_sched_capacity_margin = SCHED_CAPACITY_MARGIN; /* ~20% margin */
 
 static bool cpu_overutilized(int cpu);
 static unsigned long get_cpu_usage(int cpu);
@@ -5560,6 +5561,15 @@ next:
 	return target;
 }
 
+/* require some runnable time accrued before overutilized */
+#define MIGRATION_MINIMUM_RUNTIME_TARGET_NS (10 * 1024)
+#define MIGRATION_TARGET_CAPACITY ((MIGRATION_MINIMUM_RUNTIME_TARGET_NS\
+		<< SCHED_CAPACITY_SHIFT) / LOAD_AVG_MAX)
+
+unsigned long migration_capacity_margin =
+		((SCHED_CAPACITY_MARGIN * MIGRATION_TARGET_CAPACITY)
+				>> SCHED_CAPACITY_SHIFT);
+
 static inline int find_best_target(struct task_struct *p)
 {
 	int i;
@@ -5588,7 +5598,7 @@ static inline int find_best_target(struct task_struct *p)
 		if (new_util > capacity_orig_of(i))
 			continue;
 
-		if ((new_util * sysctl_sched_capacity_margin) > \
+		if ((new_util * migration_capacity_margin) > \
 			(capacity_orig * SCHED_CAPACITY_SCALE))
 				continue;
 
