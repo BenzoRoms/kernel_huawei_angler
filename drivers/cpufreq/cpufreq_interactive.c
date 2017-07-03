@@ -32,8 +32,12 @@
 #include <linux/kthread.h>
 #include <linux/slab.h>
 #include <linux/kernel_stat.h>
-#include <linux/display_state.h>
 #include <asm/cputime.h>
+#ifdef CONFIG_STATE_NOTIFIER
+#include <linux/state_notifier.h>
+#else
+extern bool display_on;
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/cpufreq_interactive.h>
@@ -449,7 +453,6 @@ static void cpufreq_interactive_timer(unsigned long data)
 	struct cpufreq_govinfo govinfo;
 	bool skip_hispeed_logic, skip_min_sample_time;
 	bool policy_max_fast_restore = false;
-	bool display_on = is_display_on();
 	unsigned int this_hispeed_freq;
 
 	if (!down_read_trylock(&ppol->enable_sem))
@@ -469,11 +472,18 @@ static void cpufreq_interactive_timer(unsigned long data)
 	ppol->notif_pending = false;
 	ppol->last_evaluated_jiffy = get_jiffies_64();
 
-	if (display_on
-		&& tunables->timer_rate != tunables->prev_timer_rate)
+#ifdef CONFIG_STATE_NOTIFIER
+	if (!state_suspended &&
+		tunables->timer_rate != tunables->prev_timer_rate)
 		tunables->timer_rate = tunables->prev_timer_rate;
-	else if (!display_on
-		&& tunables->timer_rate != tunables->timer_rate_screenoff) {
+	else if (state_suspended &&
+#else
+	if (display_on &&
+		tunables->timer_rate != tunables->prev_timer_rate)
+		tunables->timer_rate = tunables->prev_timer_rate;
+	else if (!display_on &&
+#endif
+		tunables->timer_rate != tunables->timer_rate_screenoff) {
 		tunables->prev_timer_rate = tunables->timer_rate;
 		tunables->timer_rate
 			= max(tunables->timer_rate,
@@ -670,7 +680,6 @@ static int cpufreq_interactive_speedchange_task(void *data)
 	unsigned long flags;
 	struct cpufreq_interactive_policyinfo *ppol;
 	struct cpufreq_interactive_tunables *tunables;
-	bool display_on = is_display_on();
 
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -703,7 +712,11 @@ static int cpufreq_interactive_speedchange_task(void *data)
 			}
 
 			if (ppol->target_freq != ppol->policy->cur) {
+#ifdef CONFIG_STATE_NOTIFIER
+			    if (tunables->powersave_bias || state_suspended)
+#else
 			    if (tunables->powersave_bias || !display_on)
+#endif
 				    __cpufreq_driver_target(ppol->policy,
 							    ppol->target_freq,
 							    CPUFREQ_RELATION_C);
@@ -1860,6 +1873,9 @@ static int __init cpufreq_interactive_init(void)
 {
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
 
+#ifndef CONFIG_STATE_NOTIFIER
+	display_on = true
+#endif
 	spin_lock_init(&speedchange_cpumask_lock);
 	mutex_init(&gov_lock);
 	mutex_init(&sched_lock);
