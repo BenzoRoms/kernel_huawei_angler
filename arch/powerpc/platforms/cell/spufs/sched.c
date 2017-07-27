@@ -24,6 +24,7 @@
 
 #include <linux/errno.h>
 #include <linux/sched.h>
+#include <linux/sched/loadavg.h>
 #include <linux/sched/rt.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -1072,9 +1073,6 @@ void spuctx_switch_state(struct spu_context *ctx,
 			atomic_inc(&cbe_spu_info[node].busy_spus);
 	}
 }
-
-#define LOAD_INT(x) ((x) >> FSHIFT)
-#define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
 
 static int show_spu_loadavg(struct seq_file *s, void *private)
 {
