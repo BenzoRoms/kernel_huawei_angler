@@ -49,6 +49,9 @@ extern unsigned int sysctl_sched_freq_account_wait_time;
 extern unsigned int sysctl_sched_migration_fixup;
 extern unsigned int sysctl_sched_heavy_task_pct;
 extern unsigned int sysctl_sched_enable_power_aware;
+/* EAS */
+extern unsigned int sysctl_sched_is_big_little;
+extern unsigned int sysctl_sched_sync_hint_enable;
 
 #if defined(CONFIG_SCHED_FREQ_INPUT) || defined(CONFIG_SCHED_HMP)
 extern unsigned int sysctl_sched_init_task_load_pct;
@@ -86,8 +89,6 @@ extern unsigned int sysctl_sched_new_task_windows;
 #define sysctl_sched_enable_hmp_task_placement 0
 
 #endif /* CONFIG_SCHED_HMP */
-extern unsigned int sysctl_sched_is_big_little;
-extern unsigned int sysctl_sched_sync_hint_enable;
 
 enum sched_tunable_scaling {
 	SCHED_TUNABLESCALING_NONE,
