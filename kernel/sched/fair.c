@@ -4830,10 +4830,6 @@ static int find_new_capacity(struct energy_env *eenv,
 			break;
 	}
 
-	/* Fixup for maximum capacity index */
-	if (idx == sge->nr_cap_states)
-		idx = idx - 1;
-
 	eenv->cap_idx = idx;
 
 	return idx;
