@@ -13,6 +13,12 @@
 
 unsigned int sysctl_sched_cfs_boost __read_mostly = 0;
 
+#ifdef CONFIG_DYNAMIC_STUNE_BOOST
+unsigned int top_app_idx = 0;
+int default_topapp_boost = 0;
+struct cgroup_subsys_state *topapp_css;
+#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
+
 /* Performance Boost region (B) threshold params */
 static int perf_boost_idx;
 
@@ -491,6 +497,42 @@ boost_read(struct cgroup *cgrp, struct cftype *cft)
 	return st->boost;
 }
 
+#ifdef CONFIG_DYNAMIC_STUNE_BOOST
+int
+dynamic_boost_write(struct cgroup_subsys_state *css, int boost)
+{
+	struct schedtune *st = css_st(css);
+	unsigned threshold_idx;
+	int boost_pct;
+
+	if (boost < -100 || boost > 100)
+		return -EINVAL;
+	boost_pct = boost;
+
+	/*
+	 * Update threshold params for Performance Boost (B)
+	 * and Performance Constraint (C) regions.
+	 * The current implementatio uses the same cuts for both
+	 * B and C regions.
+	 */
+	threshold_idx = clamp(boost_pct, 0, 99) / 10;
+	st->perf_boost_idx = threshold_idx;
+	st->perf_constrain_idx = threshold_idx;
+
+	st->boost = boost;
+	if (css == &root_schedtune.css) {
+		sysctl_sched_cfs_boost = boost;
+		perf_boost_idx  = threshold_idx;
+		perf_constrain_idx  = threshold_idx;
+	}
+
+	/* Update CPU boost */
+	schedtune_boostgroup_update(st->idx, st->boost);
+
+	return 0;
+}
+#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
+
 static int
 boost_write(struct cgroup *cgrp, struct cftype *cft,
 			  u64 boost)
@@ -553,6 +595,21 @@ schedtune_boostgroup_init(struct schedtune *st)
 		bg->group[st->idx].boost = 0;
 		bg->group[st->idx].tasks = 0;
 	}
+
+#ifdef CONFIG_DYNAMIC_STUNE_BOOST
+    /*
+     * Assume confidently that the index of top-app is the last assigned index.
+     * This observation is likely due to SchedTune cgroups being initialized in alphabetical order.
+     * E.g. background, foreground, system-background, top-app (last)
+     */
+	if (st->idx > top_app_idx) {
+		top_app_idx = st->idx;
+                topapp_css = &st->css;
+                default_topapp_boost = st->boost;
+        }
+
+	pr_info("STUNE INIT: top app idx: %d\n", top_app_idx);
+#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
 
 	return 0;
 }
