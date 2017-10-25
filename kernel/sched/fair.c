@@ -4757,17 +4757,20 @@ long group_norm_usage(struct energy_env *eenv, struct sched_group *sg)
 static int find_new_capacity(struct energy_env *eenv,
 		struct sched_group_energy *sge)
 {
-	int idx;
+	int idx, max_idx = sge->nr_cap_states - 1;
 	unsigned long util = group_max_usage(eenv);
 
+	/* default is max_cap if we don't find a match */
+	eenv->cap_idx = max_idx;
+
 	for (idx = 0; idx < sge->nr_cap_states; idx++) {
-		if (sge->cap_states[idx].cap >= util)
+		if (sge->cap_states[idx].cap >= util) {
+			eenv->cap_idx = idx;
 			return idx;
+		}
 	}
 
-	eenv->cap_idx = idx;
-
-	return idx;
+	return eenv->cap_idx;
 }
 
 static bool cpu_overutilized(int cpu)
